@@ -8,7 +8,22 @@ def test_process_segment_shape():
     sr = extractor.sr
     t = np.linspace(0, 2.0, int(sr * 2.0), endpoint=False)
     audio = 0.2 * np.sin(2 * np.pi * 220 * t).astype(np.float32)
+
     features = extractor.process_segment(audio)
+
     assert features is not None
-    assert features.shape[0] == 40
+    assert features.ndim == 2
+    assert features.shape[0] == 13
     assert features.shape[1] == extractor.target_len
+
+
+def test_process_segment_returns_float32():
+    extractor = FeatureExtractor()
+    sr = extractor.sr
+    t = np.linspace(0, 2.0, int(sr * 2.0), endpoint=False)
+    audio = 0.2 * np.sin(2 * np.pi * 220 * t).astype(np.float32)
+
+    features = extractor.process_segment(audio)
+
+    assert features is not None
+    assert features.dtype == np.float32

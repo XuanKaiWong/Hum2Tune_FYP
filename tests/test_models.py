@@ -3,12 +3,23 @@ import torch
 from src.fyp_title11.models.cnn_lstm import CNNLSTMModel, PitchCNN, FusionModel
 
 
+def test_cnn_lstm_logits_only_shape():
+    model = CNNLSTMModel(input_channels=13, num_classes=7)
+    x = torch.randn(2, 13, 128)
+
+    logits = model(x)
+
+    assert logits.shape == (2, 7)
+
+
 def test_cnn_lstm_forward_shape():
     model = CNNLSTMModel(input_channels=13, num_classes=7)
     x = torch.randn(2, 13, 128)
-    logits, features = model(x)
+
+    logits, features = model(x, return_features=True)
 
     assert logits.shape == (2, 7)
+    assert isinstance(features, dict)
     assert "context_vector" in features
     assert features["context_vector"].shape[0] == 2
 
@@ -16,6 +27,7 @@ def test_cnn_lstm_forward_shape():
 def test_pitch_cnn_forward_shape():
     model = PitchCNN(input_size=1, num_classes=7)
     x = torch.randn(2, 1, 128)
+
     logits = model(x)
 
     assert logits.shape == (2, 7)
@@ -29,5 +41,6 @@ def test_fusion_model_forward_shape():
     logits, features = model(x_acoustic, x_pitch)
 
     assert logits.shape == (2, 7)
+    assert isinstance(features, dict)
     assert "fusion_embedding" in features
     assert features["fusion_embedding"].shape[0] == 2
