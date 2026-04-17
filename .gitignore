@@ -41,10 +41,15 @@ data/hummed/
 *.flac
 
 # Model checkpoints
-models/
+/models/
 *.pth
 *.pt
 *.ckpt
+
+# Keep source model code
+!src/fyp_title11/models/
+!src/fyp_title11/models/__init__.py
+!src/fyp_title11/models/*.py
 
 # Temporary files
 temp_record.wav
