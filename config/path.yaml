@@ -1,0 +1,44 @@
+paths:
+  data:
+    raw: "data/raw"
+    processed: "data/processed"
+    hummed: "data/hummed"
+
+  raw:
+    songs: "data/raw/original_songs"
+    metadata: "data/raw/metadata"
+
+  hummed:
+    recordings: "data/hummed/recordings"
+    metadata: "data/hummed/metadata"
+
+  processed:
+    features: "data/processed/features"
+    tokens: "data/processed/tokens"
+    datasets: "data/processed/datasets"
+
+  manifests:
+    root: "data/manifests"
+
+  queries:
+    humming: "data/humming_queries"
+    references: "data/song_references"
+
+  models:
+    cnn_lstm: "models/cnn_lstm"
+    dtw: "models/dtw"
+    checkpoints: "models/checkpoints"
+
+  logs: "logs"
+  results: "results"
+  visualizations: "results/visualizations"
+  predictions: "results/predictions"
+  evaluations: "results/evaluations"
+
+  assets:
+    root: "assets"
+
+  config: "config"
+  src: "src"
+  scripts: "scripts"
+  tests: "tests"

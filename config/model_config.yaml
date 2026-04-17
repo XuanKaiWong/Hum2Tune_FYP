@@ -1,0 +1,29 @@
+# Model configurations
+
+cnn_lstm:
+  input_channels: 13
+  num_classes: 10
+  hidden_size: 64
+  num_layers: 1
+  dropout: 0.4
+  bidirectional: true
+  use_attention: true
+  norm_type: "group"
+
+pitch_cnn:
+  input_size: 1
+  num_classes: 10
+  dropout: 0.4
+  norm_type: "group"
+
+fusion:
+  num_classes: 10
+  acoustic_channels: 13
+  hidden_size: 64
+  dropout: 0.4
+  norm_type: "group"
+
+dtw:
+  window_size: null
+  distance_metric: "euclidean"
+  top_k: 5

@@ -1,0 +1,22 @@
+training:
+  batch_size: 8
+  learning_rate: 0.0005
+  epochs: 120
+  early_stopping_patience: 8
+  gradient_clip: 1.0
+  weight_decay: 0.0003
+  input_channels: 13
+  seed: 42
+  hidden_size: 128
+  num_layers: 1
+  dropout: 0.35
+  bidirectional: true
+  use_attention: true
+  norm_type: group
+  scheduler_patience: 4
+  scheduler_factor: 0.5
+  min_lr: 0.000001
+  label_smoothing: 0.05
+  num_workers: 0
+  use_weighted_sampler: true
+  use_class_weights: true

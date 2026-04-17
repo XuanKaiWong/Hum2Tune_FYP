@@ -1,0 +1,38 @@
+# Audio Processing
+librosa>=0.10.1
+soundfile>=0.12.1
+pydub>=0.25.1
+audioread>=3.0.1
+fastdtw>=0.3.4
+resampy>=0.4.0
+demucs>=4.0.0          # Added: For vocal isolation / perfect anchors
+
+# Deep Learning
+torch>=2.0.0
+torchaudio>=2.0.0
+
+# Data Processing
+numpy>=1.23.0
+pandas>=2.0.0
+scipy>=1.10.0
+scikit-learn>=1.2.0
+joblib>=1.2.0
+
+# Visualization
+matplotlib>=3.7.0
+seaborn>=0.12.0
+
+# Utilities
+tqdm>=4.65.0
+colorama>=0.4.6
+pyyaml>=6.0
+python-dotenv>=1.0.0
+
+# Testing
+pytest>=7.3.0
+
+# Web Interface & API
+streamlit>=1.28.0
+streamlit-audiorecorder>=0.0.4  # Added: Required for live humming in app.py
+fastapi>=0.100.0
+uvicorn>=0.22.0

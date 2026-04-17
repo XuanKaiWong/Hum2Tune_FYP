@@ -1,0 +1,64 @@
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+
+# Logs and generated outputs
+logs/
+results/
+outputs/
+
+# Generated arrays
+*.npy
+*.npz
+*.tmp.npy
+
+# Data
+data/processed/
+data/processed_datasets/
+data/manifests/
+data/demucs_output/
+data/Humming Audio/
+data/humming_queries/
+data/song_references/
+data/raw/
+data/Original Songs/
+data/hummed/
+
+# Audio files
+*.wav
+*.mp3
+*.m4a
+*.flac
+
+# Model checkpoints
+models/
+*.pth
+*.pt
+*.ckpt
+
+# Temporary files
+temp_record.wav
+temp_upload.wav
+*.tmp
+*.temp
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Editor / OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
