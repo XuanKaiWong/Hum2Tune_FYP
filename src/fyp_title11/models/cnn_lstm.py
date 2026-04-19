@@ -84,25 +84,29 @@ class TemporalAttention(nn.Module):
 # ============================================================
 
 class CNNLSTMModel(nn.Module):
-    """
-    Small-data CNN-LSTM baseline for humming classification.
+    """CNN-LSTM baseline for humming classification.
 
-    Why this version:
-    - lighter than the large 64/128/256 backbone
-    - better matched to your current dataset scale
-    - forward() does NOT always build huge feature dicts during training
-    - still supports feature extraction when explicitly requested
+    Architecture overview:
+    - 3 x ConvBlock1D (32 -> 64 -> 128 channels) extract local spectral patterns.
+    - Bidirectional LSTM models temporal dependencies between frames.
+    - TemporalAttention pools the LSTM output into a fixed-size embedding
+      by weighting frames according to their melodic salience.
+    - Linear classifier maps the embedding to class logits.
+
+    input_channels defaults to 39 to match the FeatureExtractor output
+    (13 MFCC + 13 delta + 13 delta-delta).
     """
 
     def __init__(
         self,
-        input_channels: int = 13,
+        input_channels: int = 39,   # n_mfcc * 3 -- updated from 13
         num_classes: int = 10,
         hidden_size: int = 64,
         num_layers: int = 1,
         dropout: float = 0.4,
         bidirectional: bool = True,
         use_attention: bool = True,
+        attn_hidden_dim: int = 32,  # exposed for ablation studies
         norm_type: str = "group",
     ):
         super().__init__()
@@ -114,8 +118,11 @@ class CNNLSTMModel(nn.Module):
         self.bidirectional = bidirectional
         self.use_attention = use_attention
         self.norm_type = norm_type
+        self.attn_hidden_dim = attn_hidden_dim
 
-        # Smaller backbone than the current large version
+        # -- CNN backbone: local spectral pattern extraction --------------
+        # Three stacked 1D conv blocks progressively downsample the time axis
+        # (T -> T/2 -> T/4 -> T/8) while expanding the channel dimension.
         self.conv_block1 = ConvBlock1D(
             in_channels=input_channels,
             out_channels=32,
@@ -141,6 +148,7 @@ class CNNLSTMModel(nn.Module):
             norm_type=norm_type,
         )
 
+        # -- Bidirectional LSTM: temporal context modelling ---------------
         self.lstm = nn.LSTM(
             input_size=128,
             hidden_size=hidden_size,
@@ -152,10 +160,13 @@ class CNNLSTMModel(nn.Module):
 
         self.lstm_out_size = hidden_size * (2 if bidirectional else 1)
 
+        # -- Temporal attention pooling ------------------------------------
+        # attn_hidden_dim is exposed as a hyperparameter so ablation studies
+        # can test the effect of attention capacity on performance.
         if use_attention:
             self.attention = TemporalAttention(
                 input_dim=self.lstm_out_size,
-                hidden_dim=max(32, hidden_size // 2),
+                hidden_dim=attn_hidden_dim,
             )
 
         self.embedding_dim = self.lstm_out_size
@@ -331,7 +342,7 @@ class FusionModel(nn.Module):
     def __init__(
         self,
         num_classes: int = 10,
-        acoustic_channels: int = 13,
+        acoustic_channels: int = 39,   # must match FeatureExtractor.input_channels (n_mfcc * 3)
         hidden_size: int = 64,
         dropout: float = 0.4,
         norm_type: str = "group",
@@ -395,47 +406,10 @@ class FusionModel(nn.Module):
         logits, _ = self.forward(x_acoustic, x_pitch)
         return F.softmax(logits, dim=-1)
 
-
-# ============================================================
-# Optional loss
-# ============================================================
-
-class LabelSmoothingCrossEntropy(nn.Module):
-    def __init__(self, smoothing: float = 0.1):
-        super().__init__()
-        if not 0.0 <= smoothing < 1.0:
-            raise ValueError("smoothing must be in [0, 1)")
-        self.smoothing = smoothing
-
-    def forward(self, logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-        num_classes = logits.size(-1)
-        log_probs = F.log_softmax(logits, dim=-1)
-
-        with torch.no_grad():
-            true_dist = torch.zeros_like(log_probs)
-            true_dist.fill_(self.smoothing / (num_classes - 1))
-            true_dist.scatter_(1, target.unsqueeze(1), 1.0 - self.smoothing)
-
-        return torch.mean(torch.sum(-true_dist * log_probs, dim=-1))
-
-
-def get_recommended_training_config() -> Dict:
-    return {
-        "optimizer": "AdamW",
-        "lr": 3e-4,
-        "weight_decay": 1e-3,
-        "batch_size": 4,
-        "epochs": 80,
-        "early_stopping_patience": 10,
-        "label_smoothing": 0.1,
-        "gradient_clip_norm": 1.0,
-        "scheduler": "ReduceLROnPlateau",
-        "scheduler_factor": 0.5,
-        "scheduler_patience": 4,
-        "monitor_metric": "val_loss",
-        "hidden_size": 64,
-        "dropout": 0.4,
-    }
+# NOTE: LabelSmoothingCrossEntropy was removed because PyTorch >= 1.10 provides
+# nn.CrossEntropyLoss(label_smoothing=0.1) natively. Use that instead.
+# Keeping a custom implementation alongside the native one created two
+# conflicting sources of truth and dead code.
 
 
 if __name__ == "__main__":
@@ -443,13 +417,19 @@ if __name__ == "__main__":
     T = 431
     num_classes = 10
 
-    x_acoustic = torch.randn(B, 13, T)
+    # Use 39 channels to match FeatureExtractor output (13 MFCC x 3)
+    x_acoustic = torch.randn(B, 39, T)
     x_pitch = torch.randn(B, 1, T)
 
-    print("Testing CNNLSTMModel...")
-    m1 = CNNLSTMModel(input_channels=13, num_classes=num_classes)
+    print("Testing CNNLSTMModel (39-channel input)...")
+    m1 = CNNLSTMModel(input_channels=39, num_classes=num_classes)
     y1 = m1(x_acoustic)
     print("CNNLSTM logits:", y1.shape)
+
+    print("\nTesting with return_features=True ...")
+    y1_logits, y1_feats = m1(x_acoustic, return_features=True)
+    print("CNNLSTM logits:", y1_logits.shape)
+    print("Context vector:", y1_feats["context_vector"].shape)
 
     print("\nTesting PitchCNN...")
     m2 = PitchCNN(input_size=1, num_classes=num_classes)
@@ -457,10 +437,7 @@ if __name__ == "__main__":
     print("PitchCNN logits:", y2.shape)
 
     print("\nTesting FusionModel...")
-    m3 = FusionModel(num_classes=num_classes, acoustic_channels=13)
+    m3 = FusionModel(num_classes=num_classes, acoustic_channels=39)
     y3, f3 = m3(x_acoustic, x_pitch)
     print("Fusion logits:", y3.shape)
     print("Fusion embedding:", f3["fusion_embedding"].shape)
-
-    print("\nRecommended small-data training config:")
-    print(get_recommended_training_config())

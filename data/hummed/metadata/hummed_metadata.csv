@@ -1,0 +1,4 @@
+hum_id,song_id,user_id,duration,pitch_accuracy,rhythm_accuracy
+hum_001_01,song_001,user_01,10.5,0.85,0.8
+hum_001_02,song_001,user_02,9.8,0.78,0.75
+hum_002_01,song_002,user_01,11.2,0.92,0.88

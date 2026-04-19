@@ -30,7 +30,7 @@ audio:
 
 models:
   cnn_lstm:
-    input_channels: 13
+    input_channels: 39
     hidden_size: 64
     num_layers: 1
     dropout: 0.4
@@ -62,7 +62,7 @@ evaluation:
 MODEL_CONFIG_YAML = """# Model configurations
 
 cnn_lstm:
-  input_channels: 13
+  input_channels: 39
   num_classes: 10
   hidden_size: 64
   num_layers: 1
@@ -79,7 +79,7 @@ pitch_cnn:
 
 fusion:
   num_classes: 10
-  acoustic_channels: 13
+  acoustic_channels: 39
   hidden_size: 64
   dropout: 0.4
   norm_type: "group"
@@ -157,7 +157,7 @@ TRAINING_CONFIG_YAML = """training:
   early_stopping_patience: 10
   gradient_clip: 1.0
   weight_decay: 1e-3
-  input_channels: 13
+  input_channels: 39
   seed: 42
   hidden_size: 64
   num_layers: 1
@@ -194,21 +194,21 @@ def write_if_missing(path: Path, content: str) -> None:
     if not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
-        print(f"  ✓ {path.relative_to(path.parent.parent if path.parent.parent.exists() else path.parent)} created")
+        print(f"  [OK] {path.relative_to(path.parent.parent if path.parent.parent.exists() else path.parent)} created")
     else:
-        print(f"  ✓ {path.name} already exists")
+        print(f"  [OK] {path.name} already exists")
 
 
 def setup_project() -> None:
     print("\n" + "=" * 70)
-    print("🎵 HUM2TUNE - PROJECT SETUP")
+    print("[Hum2Tune] HUM2TUNE - PROJECT SETUP")
     print("=" * 70)
 
     project_root = Path(__file__).parent.parent
 
-    print(f"\n📁 Project Root: {project_root}")
-    print(f"🐍 Python Version: {platform.python_version()}")
-    print(f"💻 OS: {platform.system()} {platform.release()}")
+    print(f"\n[Folder] Project Root: {project_root}")
+    print(f"[Python] Python Version: {platform.python_version()}")
+    print(f"[OS] OS: {platform.system()} {platform.release()}")
 
     print("\n[1/5] Creating directory structure...")
     directories = [
@@ -235,7 +235,7 @@ def setup_project() -> None:
     for directory in directories:
         dir_path = project_root / directory
         dir_path.mkdir(parents=True, exist_ok=True)
-        print(f"  ✓ {directory}")
+        print(f"  [OK] {directory}")
 
     print("\n[2/5] Checking Python dependencies...")
     required_packages = {
@@ -252,13 +252,13 @@ def setup_project() -> None:
     for import_name, display_name in required_packages.items():
         try:
             __import__(import_name)
-            print(f"  ✓ {display_name}")
+            print(f"  [OK] {display_name}")
         except ImportError:
             missing.append(display_name)
-            print(f"  ✗ {display_name} (missing)")
+            print(f"  [X] {display_name} (missing)")
 
     if missing:
-        print(f"\n⚠ Missing packages: {', '.join(missing)}")
+        print(f"\n[!] Missing packages: {', '.join(missing)}")
         print("  Install with: pip install -r requirements.txt")
 
     print("\n[3/5] Creating configuration files...")
@@ -293,33 +293,33 @@ def setup_project() -> None:
         }
     )
     hummed_df.to_csv(project_root / "data/hummed/metadata/hummed_metadata.csv", index=False)
-    print("  ✓ Sample metadata created")
+    print("  [OK] Sample metadata created")
 
     print("\n[5/5] Creating environment file...")
     env_example = project_root / ".env.example"
     if not env_example.exists():
         env_example.write_text(ENV_EXAMPLE, encoding="utf-8")
-        print("  ✓ .env.example created")
+        print("  [OK] .env.example created")
     else:
-        print("  ✓ .env.example already exists")
+        print("  [OK] .env.example already exists")
 
     actual_env = project_root / ".env"
     if not actual_env.exists():
         shutil.copy(env_example, actual_env)
-        print("  ✓ .env created (copy of .env.example)")
+        print("  [OK] .env created (copy of .env.example)")
     else:
-        print("  ✓ .env already exists")
+        print("  [OK] .env already exists")
 
     print("\n" + "=" * 70)
-    print("✅ SETUP COMPLETED SUCCESSFULLY!")
+    print("[OK] SETUP COMPLETED SUCCESSFULLY!")
     print("=" * 70)
-    print("\n📋 Next Steps:")
+    print("\n[Report] Next Steps:")
     print("  1. Install dependencies: pip install -r requirements.txt")
     print("  2. Create dataset / features as needed")
     print("  3. Train model: python scripts/train_model.py")
     print("  4. Predict: python scripts/predict.py --audio your_file.wav")
     print("  5. Evaluate: python scripts/evaluate.py")
-    print("\n🎵 Happy coding! 🎵")
+    print("\n[Hum2Tune] Happy coding! [Hum2Tune]")
 
 
 if __name__ == "__main__":
@@ -329,5 +329,5 @@ if __name__ == "__main__":
         print("\nSetup cancelled by user.")
         sys.exit(1)
     except Exception as exc:
-        print(f"\n❌ Setup failed: {exc}")
+        print(f"\n[ERR] Setup failed: {exc}")
         sys.exit(1)

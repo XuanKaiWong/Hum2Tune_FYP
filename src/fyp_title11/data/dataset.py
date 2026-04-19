@@ -100,7 +100,10 @@ class ChunkedAudioDataset(Dataset):
 
         chunk_idx = bisect.bisect_right(self._offsets, idx) - 1
         local_idx = idx - self._offsets[chunk_idx]
-        x = torch.as_tensor(np.array(self._x_chunks[chunk_idx][local_idx]), dtype=torch.float32)
+        # Use .copy() rather than np.array() to avoid loading the full chunk
+        # into RAM. mmap arrays are read-only, so a minimal copy is required,
+        # but np.array() would trigger an unnecessary full array materialisation.
+        x = torch.as_tensor(self._x_chunks[chunk_idx][local_idx].copy(), dtype=torch.float32)
         y = torch.as_tensor(int(self._y_chunks[chunk_idx][local_idx]), dtype=torch.long)
         return x, y
 

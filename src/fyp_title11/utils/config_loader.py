@@ -70,7 +70,7 @@ class ConfigLoader:
                 },
                 "models": {
                     "cnn_lstm": {
-                        "input_channels": 13,
+                        "input_channels": 39,
                         "hidden_size": 64,
                         "num_layers": 1,
                         "dropout": 0.4,
@@ -108,7 +108,7 @@ class ConfigLoader:
             },
             "model": {
                 "cnn_lstm": {
-                    "input_channels": 13,
+                    "input_channels": 39,
                     "num_classes": 10,
                     "hidden_size": 64,
                     "num_layers": 1,
@@ -154,7 +154,7 @@ class ConfigLoader:
                     "early_stopping_patience": 10,
                     "gradient_clip": 1.0,
                     "weight_decay": 1e-3,
-                    "input_channels": 13,
+                    "input_channels": 39,
                     "seed": 42,
                     "hidden_size": 64,
                     "num_layers": 1,
@@ -322,7 +322,7 @@ class ConfigLoader:
             elif isinstance(value, str) and value.strip():
                 path = Path(value)
                 path.mkdir(parents=True, exist_ok=True)
-                print(f"✓ Created directory: {path}")
+                print(f"[OK] Created directory: {path}")
 
         walk(self.get_paths())
 
@@ -349,10 +349,10 @@ class ConfigLoader:
         """Pretty-print one config section or all configs."""
         if config_name:
             config = self.get_config(config_name)
-            print(f"\n📋 Configuration: {config_name}")
+            print(f"\n[Report] Configuration: {config_name}")
             print(json.dumps(config, indent=2, default=str))
             return
 
         for name, config in self.configs.items():
-            print(f"\n📋 Configuration: {name}")
+            print(f"\n[Report] Configuration: {name}")
             print(json.dumps(config, indent=2, default=str))

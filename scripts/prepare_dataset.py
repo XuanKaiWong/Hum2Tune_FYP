@@ -45,6 +45,9 @@ logger = logging.getLogger(__name__)
 SEED = 42
 NOISE_LEVEL = 0.005
 PITCH_SHIFT_STEPS = [-3, -2, -1, 1, 2, 3]
+# Time-stretch rates simulate users humming faster or slower than the original tempo.
+# This is critical for tempo invariance in cross-domain retrieval.
+TIME_STRETCH_RATES = [0.85, 0.90, 1.10, 1.15]
 AUDIO_EXTENSIONS = ("*.wav", "*.mp3", "*.m4a", "*.flac")
 
 
@@ -123,16 +126,43 @@ class ChunkedDatasetWriter:
 
 
 def augment_audio(audio: np.ndarray, sr: int, rng: random.Random) -> list[np.ndarray]:
+    """Return augmented variants of the input audio (training split only).
+
+    Augmentation strategy:
+    - Gaussian noise: simulates microphone quality / background interference.
+    - Pitch shifting: key-invariant training (users hum in different keys).
+    - Time stretching: tempo-invariant training (users hum at different speeds).
+
+    Each variant is independent so the model sees diverse examples of the
+    same underlying melody.
+    """
     augmented: list[np.ndarray] = []
+
+    # --- Gaussian noise ---
     noise = np.random.normal(0, NOISE_LEVEL, audio.shape).astype(np.float32)
     augmented.append((audio + noise).clip(-1.0, 1.0))
-    pool = PITCH_SHIFT_STEPS.copy()
-    rng.shuffle(pool)
-    for n_steps in pool[:2]:
+
+    # --- Pitch shifting: pick 2 random steps ---
+    pitch_pool = PITCH_SHIFT_STEPS.copy()
+    rng.shuffle(pitch_pool)
+    for n_steps in pitch_pool[:2]:
         try:
             augmented.append(librosa.effects.pitch_shift(audio, sr=sr, n_steps=n_steps))
         except Exception:
             logger.warning("Pitch shift failed for n_steps=%s", n_steps)
+
+    # --- Time stretching: pick 2 random rates ---
+    # Stretching simulates users humming faster or slower than the reference.
+    # This is essential for temporal robustness in QBH systems.
+    rate_pool = TIME_STRETCH_RATES.copy()
+    rng.shuffle(rate_pool)
+    for rate in rate_pool[:2]:
+        try:
+            stretched = librosa.effects.time_stretch(audio, rate=rate)
+            augmented.append(stretched.astype(np.float32))
+        except Exception:
+            logger.warning("Time stretch failed for rate=%s", rate)
+
     return augmented
 
 

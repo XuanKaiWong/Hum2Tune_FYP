@@ -1,0 +1,12 @@
+query_id,song_id,query_path,singer_id
+Q001,001,data/humming_queries/Back To December/hum_01.wav,S01
+Q002,001,data/humming_queries/Back To December/hum_02.wav,S01
+Q003,001,data/humming_queries/Back To December/hum_03.wav,S02
+Q004,001,data/humming_queries/Back To December/hum_04.wav,S03
+Q005,002,data/humming_queries/A Thousand Years/hum_01.wav,S01
+Q006,002,data/humming_queries/A Thousand Years/hum_02.wav,S01
+Q007,002,data/humming_queries/A Thousand Years/hum_03.wav,S02
+Q008,002,data/humming_queries/A Thousand Years/hum_04.wav,S03
+Q009,003,data/humming_queries/Sunflower/hum_01.wav,S01
+Q010,003,data/humming_queries/Sunflower/hum_02.wav,S02
+Q011,003,data/humming_queries/Sunflower/hum_03.wav,S03

@@ -1,5 +1,18 @@
+"""Evaluation script for Hum2Tune classifiers.
+
+Supports both CNN-LSTM and Audio Transformer models.
+Delegates all metric computation to fyp_title11.evaluation.metrics so
+there is one canonical implementation shared across training, evaluation,
+and notebooks.
+
+Usage:
+    python scripts/evaluate.py --model cnn_lstm
+    python scripts/evaluate.py --model audio_transformer
+"""
+
 from __future__ import annotations
 
+import argparse
 import io
 import json
 import logging
@@ -11,25 +24,22 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import yaml
-from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, top_k_accuracy_score
 from torch.utils.data import DataLoader
 
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root / "src"))
 
 from fyp_title11.data.dataset import load_class_map, resolve_split_dataset
+from fyp_title11.evaluation.metrics import compute_all_metrics
 from fyp_title11.models.cnn_lstm import CNNLSTMModel
+from fyp_title11.models.audio_transformer import AudioTransformer
 
 log_dir = project_root / "logs"
 log_dir.mkdir(parents=True, exist_ok=True)
 
 _utf8_stdout = io.TextIOWrapper(
-    sys.stdout.buffer,
-    encoding="utf-8",
-    errors="replace",
-    line_buffering=True,
+    sys.stdout.buffer, encoding="utf-8", errors="replace", line_buffering=True
 )
-
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -40,8 +50,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-TOP_K_VALUES = [1, 3, 5]
+SUPPORTED_MODELS = ("cnn_lstm", "audio_transformer")
 
+
+# -----------------------------------------------------------------------------
+#  Helpers
+# -----------------------------------------------------------------------------
 
 def torch_load(path: Path, device: torch.device) -> Any:
     try:
@@ -61,65 +75,81 @@ def load_training_config() -> dict[str, Any]:
     if config_path.exists():
         with open(config_path, "r", encoding="utf-8") as f:
             loaded = yaml.safe_load(f)
-            if isinstance(loaded, dict) and "training" in loaded and isinstance(loaded["training"], dict):
+            if isinstance(loaded, dict) and "training" in loaded:
                 return loaded["training"]
-
-    return {
-        "input_channels": 13,
-        "hidden_size": 64,
-        "num_layers": 1,
-        "dropout": 0.4,
-        "bidirectional": True,
-        "use_attention": True,
-        "norm_type": "group",
-        "batch_size": 4,
-        "num_workers": 0,
-    }
+    return {"input_channels": 39, "hidden_size": 128, "num_layers": 1,
+            "dropout": 0.35, "bidirectional": True, "use_attention": True,
+            "norm_type": "group", "batch_size": 8, "num_workers": 0}
 
 
-def build_model(num_classes: int, train_conf: dict[str, Any]) -> CNNLSTMModel:
-    return CNNLSTMModel(
-        input_channels=int(train_conf.get("input_channels", 13)),
-        num_classes=num_classes,
-        hidden_size=int(train_conf.get("hidden_size", 64)),
-        num_layers=int(train_conf.get("num_layers", 1)),
-        dropout=float(train_conf.get("dropout", 0.4)),
-        bidirectional=bool(train_conf.get("bidirectional", True)),
-        use_attention=bool(train_conf.get("use_attention", True)),
-        norm_type=str(train_conf.get("norm_type", "group")),
-    )
-
-
-def compute_mrr(targets: np.ndarray, probs: np.ndarray) -> float:
-    order = np.argsort(-probs, axis=1)
-    reciprocal_ranks = []
-    for target, ranked in zip(targets, order):
-        rank = int(np.where(ranked == target)[0][0]) + 1
-        reciprocal_ranks.append(1.0 / rank)
-    return float(np.mean(reciprocal_ranks))
+def build_model(model_name: str, num_classes: int, conf: dict[str, Any]):
+    """Instantiate the requested model architecture from config."""
+    if model_name == "cnn_lstm":
+        return CNNLSTMModel(
+            input_channels=int(conf.get("input_channels", 39)),
+            num_classes=num_classes,
+            hidden_size=int(conf.get("hidden_size", 128)),
+            num_layers=int(conf.get("num_layers", 1)),
+            dropout=float(conf.get("dropout", 0.35)),
+            bidirectional=bool(conf.get("bidirectional", True)),
+            use_attention=bool(conf.get("use_attention", True)),
+            attn_hidden_dim=int(conf.get("attn_hidden_dim", 32)),
+            norm_type=str(conf.get("norm_type", "group")),
+        )
+    if model_name == "audio_transformer":
+        t = conf.get("transformer", {})
+        return AudioTransformer(
+            input_channels=int(conf.get("input_channels", 39)),
+            num_classes=num_classes,
+            d_model=int(t.get("d_model", 128)),
+            nhead=int(t.get("nhead", 4)),
+            num_layers=int(t.get("num_layers", 2)),
+            dim_feedforward=int(t.get("dim_feedforward", 256)),
+            dropout=float(t.get("dropout", 0.3)),
+        )
+    raise ValueError(f"Unsupported model '{model_name}'. Choose from: {SUPPORTED_MODELS}")
 
 
 def plot_confusion_matrix(cm: np.ndarray, class_names: list[str], save_path: Path) -> None:
     save_path.parent.mkdir(parents=True, exist_ok=True)
-
-    fig, ax = plt.subplots(figsize=(max(8, len(class_names) * 0.6), max(6, len(class_names) * 0.6)))
-    im = ax.imshow(cm, interpolation="nearest")
-    ax.figure.colorbar(im, ax=ax)
-    ax.set_title("Confusion Matrix")
-    ax.set_xlabel("Predicted")
-    ax.set_ylabel("Actual")
-    ax.set_xticks(range(len(class_names)))
-    ax.set_yticks(range(len(class_names)))
-    ax.set_xticklabels(class_names, rotation=90, fontsize=8)
-    ax.set_yticklabels(class_names, fontsize=8)
+    fig_size = max(8, len(class_names) * 0.55)
+    fig, ax = plt.subplots(figsize=(fig_size, fig_size * 0.8))
+    im = ax.imshow(cm, interpolation="nearest", cmap="Blues")
+    ax.figure.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    ax.set_title("Confusion Matrix (row-normalised)", fontsize=13, pad=12)
+    ax.set_xlabel("Predicted class", fontsize=10)
+    ax.set_ylabel("True class", fontsize=10)
+    ticks = range(len(class_names))
+    ax.set_xticks(ticks)
+    ax.set_yticks(ticks)
+    ax.set_xticklabels(class_names, rotation=90, fontsize=7)
+    ax.set_yticklabels(class_names, fontsize=7)
     plt.tight_layout()
     plt.savefig(save_path, dpi=150, bbox_inches="tight")
     plt.close()
+    logger.info("Confusion matrix saved -> %s", save_path)
 
 
-def evaluate() -> None:
+# -----------------------------------------------------------------------------
+#  Main evaluation loop
+# -----------------------------------------------------------------------------
+
+def evaluate(model_name: str = "cnn_lstm", curriculum: bool = False) -> None:
+    """Evaluate a trained model on the test (or val) split.
+
+    Args:
+        model_name:  Architecture to evaluate ('cnn_lstm' or 'audio_transformer').
+        curriculum:  If True, load the curriculum checkpoint (best_model_curriculum.pth)
+                     instead of the standard checkpoint (best_model.pth).
+                     This keeps standard and curriculum results in separate files
+                     so the comparison table is never accidentally overwritten.
+    """
+    if model_name not in SUPPORTED_MODELS:
+        raise ValueError(f"Unsupported model '{model_name}'. Choose from: {SUPPORTED_MODELS}")
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    train_conf = load_training_config()
+    conf = load_training_config()
+    logger.info("Evaluating '%s' on device: %s", model_name, device)
 
     data_dir = project_root / "data" / "processed" / "datasets"
     results_dir = project_root / "results" / "evaluations"
@@ -130,32 +160,57 @@ def evaluate() -> None:
     class_map = load_class_map(data_dir / "classes.json")
     class_names = [class_map[str(i)] for i in range(len(class_map))]
     num_classes = len(class_names)
+    logger.info("Classes: %d", num_classes)
 
-    test_dataset = resolve_split_dataset(data_dir, "test_data")
-    batch_size = int(train_conf.get("batch_size", 4))
-    num_workers = int(train_conf.get("num_workers", 0))
+    # Use test split; fall back to val if test is missing (small datasets)
+    try:
+        test_dataset = resolve_split_dataset(data_dir, "test_data")
+        split_used = "test"
+    except FileNotFoundError:
+        logger.warning("test_data not found -- evaluating on val_data instead")
+        test_dataset = resolve_split_dataset(data_dir, "val_data")
+        split_used = "val"
+
     test_loader = DataLoader(
         test_dataset,
-        batch_size=batch_size,
+        batch_size=int(conf.get("batch_size", 8)),
         shuffle=False,
-        num_workers=num_workers,
+        num_workers=int(conf.get("num_workers", 0)),
         pin_memory=torch.cuda.is_available(),
     )
 
-    model = build_model(num_classes=num_classes, train_conf=train_conf).to(device)
-    model_path = project_root / "models" / "cnn_lstm" / "best_model.pth"
-    if not model_path.exists():
-        raise FileNotFoundError(f"Model weights not found: {model_path}")
-
-    checkpoint = torch_load(model_path, device)
-    if isinstance(checkpoint, dict):
-        state = checkpoint.get("model_state") or checkpoint.get("model_state_dict") or checkpoint.get("state_dict") or checkpoint
+    # Select checkpoint based on whether curriculum mode was requested.
+    # Using separate filenames prevents standard and curriculum results from
+    # overwriting each other in results/evaluations/.
+    if curriculum:
+        model_path = project_root / "models" / model_name / "best_model_curriculum.pth"
+        result_stem = f"{model_name}_curriculum"
     else:
-        state = checkpoint
+        model_path = project_root / "models" / model_name / "best_model.pth"
+        result_stem = model_name
 
+    if not model_path.exists():
+        hint = (
+            f"python main.py train --model {model_name} --curriculum"
+            if curriculum else
+            f"python main.py train --model {model_name}"
+        )
+        raise FileNotFoundError(
+            f"No checkpoint found at {model_path}.\n"
+            f"Train first: {hint}"
+        )
+
+    logger.info("Loading checkpoint: %s", model_path)
+    model = build_model(model_name, num_classes, conf).to(device)
+    checkpoint = torch_load(model_path, device)
+    state = (checkpoint.get("model_state") or checkpoint.get("model_state_dict")
+             or checkpoint.get("state_dict") or checkpoint
+             if isinstance(checkpoint, dict) else checkpoint)
     model.load_state_dict(state)
     model.eval()
+    logger.info("Loaded weights from %s", model_path)
 
+    # Collect predictions
     all_targets: list[int] = []
     all_preds: list[int] = []
     all_probs: list[np.ndarray] = []
@@ -163,69 +218,86 @@ def evaluate() -> None:
     with torch.no_grad():
         for X, y in test_loader:
             X = X.to(device, non_blocking=True)
-
             logits = extract_logits(model(X))
             probs = torch.softmax(logits, dim=1).cpu().numpy()
-            preds = probs.argmax(axis=1)
-
             all_probs.append(probs)
-            all_preds.extend(preds.tolist())
+            all_preds.extend(probs.argmax(axis=1).tolist())
             all_targets.extend(y.numpy().tolist())
 
     if not all_targets:
-        raise ValueError("Test set is empty. Rebuild the dataset first.")
+        raise ValueError("Evaluation set is empty. Run prepare_dataset.py first.")
 
-    probs_np = np.vstack(all_probs)
-    preds_np = np.asarray(all_preds, dtype=np.int64)
     targets_np = np.asarray(all_targets, dtype=np.int64)
+    preds_np = np.asarray(all_preds, dtype=np.int64)
+    probs_np = np.vstack(all_probs)
 
-    metrics: dict[str, object] = {
-        "model": "cnn_lstm",
-        "num_classes_total": num_classes,
-        "num_test_samples": int(len(all_targets)),
-        "accuracy": float(accuracy_score(targets_np, preds_np)),
-    }
-
-    all_labels = np.arange(num_classes, dtype=np.int64)
-    for k in TOP_K_VALUES:
-        kk = min(k, num_classes)
-        metrics[f"top_{kk}_accuracy"] = float(
-            top_k_accuracy_score(targets_np, probs_np, k=kk, labels=all_labels)
-        )
-        metrics[f"recall_at_{kk}"] = metrics[f"top_{kk}_accuracy"]
-
-    metrics["mrr"] = compute_mrr(targets_np, probs_np)
-
-    present_labels = np.unique(targets_np)
-    present_names = [class_names[i] for i in present_labels]
-
-    report = classification_report(
-        targets_np,
-        preds_np,
-        labels=present_labels,
-        target_names=present_names,
-        output_dict=True,
-        zero_division=0,
+    # Compute all metrics using the shared metrics module
+    metrics = compute_all_metrics(
+        y_true=targets_np,
+        y_pred=preds_np,
+        y_prob=probs_np,
+        class_names=class_names,
+        top_k_values=[1, 3, 5],
     )
-    metrics["classification_report"] = report
-    metrics["num_classes_in_test"] = int(len(present_labels))
-    metrics["macro_f1"] = float(report["macro avg"]["f1-score"])
-    metrics["weighted_f1"] = float(report["weighted avg"]["f1-score"])
 
-    cm = confusion_matrix(targets_np, preds_np, labels=present_labels)
-    plot_confusion_matrix(cm, present_names, viz_dir / "cnn_lstm_confusion_matrix.png")
+    # Add evaluation metadata
+    metrics["model"] = model_name
+    metrics["curriculum"] = curriculum
+    metrics["checkpoint"] = str(model_path)
+    metrics["split"] = split_used
+    metrics["num_classes"] = num_classes
+    metrics["num_samples"] = int(len(targets_np))
 
-    out_path = results_dir / "cnn_lstm_evaluation_results.json"
+    # Log headline metrics
+    logger.info("-- Evaluation Results --------------------------")
+    for key in ("accuracy", "top_1_accuracy", "top_3_accuracy", "top_5_accuracy",
+                "mrr", "map_at_10", "ndcg_at_10", "macro_f1"):
+        if key in metrics:
+            logger.info("  %-22s %.4f", key + ":", metrics[key])
+    logger.info("------------------------------------------------")
+
+    # Confusion matrix -- already shaped (num_classes, num_classes) thanks to
+    # compute_confusion_matrix(num_classes=...) in compute_all_metrics().
+    # Row-normalise here for readability in the plot.
+    cm_raw = np.array(metrics["confusion_matrix"], dtype=float)
+    row_sums = cm_raw.sum(axis=1, keepdims=True)
+    cm_norm = np.where(row_sums == 0, 0.0, cm_raw / row_sums)
+    plot_confusion_matrix(
+        cm_norm, class_names,
+        viz_dir / f"{result_stem}_confusion_matrix.png"
+    )
+
+    # Most confused pairs (useful for dissertation error analysis section)
+    if "most_confused_pairs" in metrics:
+        logger.info("Top confused pairs (true -> predicted):")
+        for true_c, pred_c, count in metrics["most_confused_pairs"][:5]:
+            logger.info("  %s -> %s  (%d samples)", true_c, pred_c, count)
+
+    # Save JSON report with a stem that distinguishes standard from curriculum,
+    # preventing accidental overwrites when running both variants.
+    # standard CNN-LSTM -> cnn_lstm_evaluation_results.json
+    # curriculum CNN-LSTM -> cnn_lstm_curriculum_evaluation_results.json
+    report_metrics = {k: v for k, v in metrics.items() if k not in ("report_str",)}
+    out_path = results_dir / f"{result_stem}_evaluation_results.json"
     with open(out_path, "w", encoding="utf-8") as f:
-        json.dump(metrics, f, indent=2)
-
-    logger.info("Evaluation complete on device: %s", device)
-    logger.info("Accuracy: %.4f", metrics["accuracy"])
-    logger.info("Top-3: %.4f", metrics["top_3_accuracy"])
-    logger.info("Top-5: %.4f", metrics["top_5_accuracy"])
-    logger.info("MRR: %.4f", metrics["mrr"])
-    logger.info("Saved results to %s", out_path)
+        json.dump(report_metrics, f, indent=2, default=str)
+    logger.info("Results saved -> %s", out_path)
 
 
 if __name__ == "__main__":
-    evaluate()
+    parser = argparse.ArgumentParser(description="Evaluate a trained Hum2Tune model")
+    parser.add_argument(
+        "--model", type=str, default="cnn_lstm",
+        choices=list(SUPPORTED_MODELS),
+        help="Model architecture to evaluate",
+    )
+    parser.add_argument(
+        "--curriculum", action="store_true", default=False,
+        help=(
+            "Load the curriculum checkpoint (best_model_curriculum.pth) instead of "
+            "the standard checkpoint (best_model.pth). Results are saved to a "
+            "separate file so the standard baseline is never overwritten."
+        ),
+    )
+    args = parser.parse_args()
+    evaluate(model_name=args.model, curriculum=args.curriculum)

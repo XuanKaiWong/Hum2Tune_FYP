@@ -1,29 +1,38 @@
-# Model configurations
+# Hum2Tune — Model Architecture Configuration
+# All input_channels values reflect the 39-channel feature extractor output:
+#   13 MFCC + 13 delta-MFCC + 13 delta-delta-MFCC = 39 channels
 
 cnn_lstm:
-  input_channels: 13
-  num_classes: 10
-  hidden_size: 64
+  input_channels: 39      # n_mfcc * 3 — do not change without rerunning prepare_dataset.py
+  hidden_size: 128
   num_layers: 1
-  dropout: 0.4
+  dropout: 0.35
   bidirectional: true
   use_attention: true
+  attn_hidden_dim: 32     # exposed for ablation; controls TemporalAttention capacity
   norm_type: "group"
 
+transformer:
+  input_channels: 39      # must match cnn_lstm.input_channels for fair RQ3 comparison
+  d_model: 128
+  nhead: 4
+  num_layers: 2
+  dim_feedforward: 256
+  dropout: 0.3
+  max_seq_len: 500
+
 pitch_cnn:
-  input_size: 1
-  num_classes: 10
+  input_size: 1           # raw pitch contour (single channel)
   dropout: 0.4
   norm_type: "group"
 
 fusion:
-  num_classes: 10
-  acoustic_channels: 13
-  hidden_size: 64
+  acoustic_channels: 39   # must match cnn_lstm.input_channels
+  hidden_size: 128
   dropout: 0.4
   norm_type: "group"
 
 dtw:
-  window_size: null
+  window_size: null        # Sakoe-Chiba band; null = unconstrained
   distance_metric: "euclidean"
   top_k: 5

@@ -3,7 +3,12 @@ import librosa
 import torch
 from typing import Tuple, Optional, Dict, List
 import warnings
-warnings.filterwarnings('ignore')
+
+# Suppress only TensorFlow/CREPE verbosity -- not all warnings globally.
+# A blanket warnings.filterwarnings('ignore') would hide real bugs elsewhere.
+warnings.filterwarnings('ignore', category=UserWarning, module='tensorflow')
+warnings.filterwarnings('ignore', message='.*TF.*')
+warnings.filterwarnings('ignore', message='.*CUDA.*', module='tensorflow')
 
 # Robust Import for CREPE
 try:
@@ -43,9 +48,13 @@ class PitchDetector:
         return {'pitches': pitches, 'method': 'yin'}
     
     def detect_pyin(self, audio: np.ndarray, sr: Optional[int] = None) -> Dict:
-        """Probabilistic YIN (pYIN) algorithm"""
+        """Probabilistic YIN (pYIN) pitch detection.
+
+        Returns voiced_probs alongside the pitch array so callers can use
+        frame-level confidence for weighted averaging in the multi-method ensemble.
+        """
         if sr is None: sr = self.sample_rate
-        
+
         f0, voiced_flag, voiced_probs = librosa.pyin(
             audio,
             fmin=self.fmin,
@@ -55,7 +64,12 @@ class PitchDetector:
             hop_length=self.hop_length,
             fill_na=0.0
         )
-        return {'pitches': f0, 'method': 'pyin'}
+        return {
+            'pitches': f0,
+            'voiced_flag': voiced_flag,
+            'voiced_probs': voiced_probs,   # frame-level confidence [0, 1]
+            'method': 'pyin',
+        }
     
     def detect_crepe(self, audio: np.ndarray, sr: Optional[int] = None) -> Dict:
         """CREPE: Convolutional Representation for Pitch Estimation"""

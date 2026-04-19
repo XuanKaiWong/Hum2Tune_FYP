@@ -1,5 +1,5 @@
 """
-REPORT_GENERATOR.PY — Automated Evaluation Report Builder
+REPORT_GENERATOR.PY -- Automated Evaluation Report Builder
 FYP Hum2Tune: Melody-Based Music Recognition
 
 Generates a self-contained HTML evaluation report from saved results,
@@ -21,14 +21,14 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# ─── Paths ────────────────────────────────────────────────────────────────────
+# --- Paths --------------------------------------------------------------------
 project_root = Path(__file__).parent.parent
 RESULTS_DIR = project_root / "results" / "evaluations"
 VIZ_DIR = project_root / "results" / "visualizations"
 REPORT_DIR = project_root / "results"
 
 
-# ─── HTML Template Helpers ────────────────────────────────────────────────────
+# --- HTML Template Helpers ----------------------------------------------------
 
 def _badge(value: str, color: str) -> str:
     """Return an inline HTML badge span."""
@@ -59,7 +59,7 @@ def _img_tag(path: Path, alt: str, width: str = "100%") -> str:
             f'<img src="data:image/{ext};base64,{b64}" '
             f'alt="{alt}" style="width:{width};border-radius:6px;" />'
         )
-    return f'<p style="color:#999;">[{alt} — image not found at {path}]</p>'
+    return f'<p style="color:#999;">[{alt} -- image not found at {path}]</p>'
 
 
 def _per_class_table(report_dict: dict, class_names: list) -> str:
@@ -115,7 +115,7 @@ def generate_report() -> Path:
         FileNotFoundError: If evaluation_results.json is missing (run
         evaluate.py first).
     """
-    # ── Load Evaluation Results ───────────────────────────────────────────
+    # -- Load Evaluation Results -------------------------------------------
     eval_path = RESULTS_DIR / "evaluation_results.json"
     if not eval_path.exists():
         raise FileNotFoundError(
@@ -126,7 +126,7 @@ def generate_report() -> Path:
     with open(eval_path, "r") as f:
         eval_data = json.load(f)
 
-    # ── Load Training Summary (optional) ─────────────────────────────────
+    # -- Load Training Summary (optional) ---------------------------------
     train_summary = {}
     train_path = RESULTS_DIR / "training_summary.json"
     if train_path.exists():
@@ -140,7 +140,7 @@ def generate_report() -> Path:
     num_classes = len(class_names)
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
 
-    # ── Metric Cards ──────────────────────────────────────────────────────
+    # -- Metric Cards ------------------------------------------------------
     top1 = metrics.get("top_1_accuracy", metrics.get("accuracy", 0))
     top3 = metrics.get("top_3_accuracy", 0)
     top5 = metrics.get("top_5_accuracy", 0)
@@ -154,12 +154,12 @@ def generate_report() -> Path:
         _metric_card("Classes", str(num_classes), "#1F3864"),
     ])
 
-    # ── Training Info ─────────────────────────────────────────────────────
+    # -- Training Info -----------------------------------------------------
     train_html = ""
     if train_summary:
-        epochs = train_summary.get("epochs_trained", "—")
+        epochs = train_summary.get("epochs_trained", "--")
         best_val = train_summary.get("best_val_accuracy", 0)
-        seed = train_summary.get("seed", "—")
+        seed = train_summary.get("seed", "--")
         train_html = f"""
         <div style="background:#f8f9fa;border-left:4px solid #2E75B6;
                     padding:12px 16px;margin:16px 0;border-radius:4px;">
@@ -169,25 +169,25 @@ def generate_report() -> Path:
           Random seed: {seed} (reproducible)
         </div>"""
 
-    # ── Confusion Matrix Section ──────────────────────────────────────────
+    # -- Confusion Matrix Section ------------------------------------------
     cm_img = _img_tag(VIZ_DIR / "confusion_matrix.png", "Confusion Matrix")
 
-    # ── Per-Class F1 Chart ────────────────────────────────────────────────
+    # -- Per-Class F1 Chart ------------------------------------------------
     f1_img = _img_tag(VIZ_DIR / "per_class_f1.png", "Per-Class F1")
 
-    # ── Training Curves ───────────────────────────────────────────────────
+    # -- Training Curves ---------------------------------------------------
     curves_img = _img_tag(VIZ_DIR / "training_curves.png", "Training Curves")
 
-    # ── Per-Class Table ───────────────────────────────────────────────────
+    # -- Per-Class Table ---------------------------------------------------
     class_table = _per_class_table(report_dict, class_names)
 
-    # ── Full HTML ─────────────────────────────────────────────────────────
+    # -- Full HTML ---------------------------------------------------------
     html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Hum2Tune — Evaluation Report</title>
+  <title>Hum2Tune -- Evaluation Report</title>
   <style>
     * {{ box-sizing: border-box; margin: 0; padding: 0; }}
     body {{ font-family: Arial, sans-serif; color: #333; background: #f0f2f5; }}
@@ -214,7 +214,7 @@ def generate_report() -> Path:
 <div class="container">
 
   <div class="header">
-    <h1>🎵 Hum2Tune — Evaluation Report</h1>
+    <h1>[Hum2Tune] Hum2Tune -- Evaluation Report</h1>
     <p>FYP: Melody-Based Music Recognition using Frequency Analysis</p>
     <p style="margin-top:8px;font-size:0.85em;">
       Model: CNN-LSTM &nbsp;|&nbsp; Generated: {timestamp}
@@ -222,18 +222,18 @@ def generate_report() -> Path:
   </div>
 
   <div class="card">
-    <h2>📊 Overall Performance</h2>
+    <h2>[Chart] Overall Performance</h2>
     <div class="metrics-row">{cards}</div>
     {train_html}
   </div>
 
   <div class="card">
-    <h2>📈 Training Curves</h2>
+    <h2>[Graph] Training Curves</h2>
     {curves_img}
   </div>
 
   <div class="card">
-    <h2>🔥 Confusion Matrix</h2>
+    <h2>[Hot] Confusion Matrix</h2>
     {cm_img}
     <p style="color:#666;font-size:0.85em;margin-top:8px;">
       Left: raw counts. Right: row-normalised (per-class recall).
@@ -241,31 +241,31 @@ def generate_report() -> Path:
   </div>
 
   <div class="card">
-    <h2>🏅 Per-Class F1 Score</h2>
+    <h2>[Medal] Per-Class F1 Score</h2>
     {f1_img}
   </div>
 
   <div class="card">
-    <h2>📋 Per-Class Breakdown</h2>
+    <h2>[Report] Per-Class Breakdown</h2>
     {class_table}
   </div>
 
   <div class="footer">
-    Hum2Tune FYP &nbsp;•&nbsp; Report generated {timestamp}
+    Hum2Tune FYP &nbsp;*&nbsp; Report generated {timestamp}
   </div>
 
 </div>
 </body>
 </html>"""
 
-    # ── Save ──────────────────────────────────────────────────────────────
+    # -- Save --------------------------------------------------------------
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
     report_path = REPORT_DIR / "evaluation_report.html"
     with open(report_path, "w", encoding="utf-8") as f:
         f.write(html)
 
-    logger.info(f"✅ Evaluation report saved to {report_path}")
-    print(f"\n✅ Report generated: {report_path}")
+    logger.info(f"[OK] Evaluation report saved to {report_path}")
+    print(f"\n[OK] Report generated: {report_path}")
     return report_path
 
 

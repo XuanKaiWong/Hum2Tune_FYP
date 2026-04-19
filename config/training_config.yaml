@@ -1,22 +1,55 @@
+# Hum2Tune — Training Configuration
+# This file is the single source of truth for all training hyperparameters.
+# Values here override the defaults coded in train_model.py::load_config().
+
 training:
+  # ── Data ─────────────────────────────────────────────────────────────────
+  # input_channels MUST match FeatureExtractor.input_channels = n_mfcc * 3
+  # n_mfcc defaults to 13, so 13 * 3 = 39 channels (MFCC + delta + delta-delta)
+  input_channels: 39
+  num_workers: 0
   batch_size: 8
-  learning_rate: 0.0005
-  epochs: 120
-  early_stopping_patience: 8
-  gradient_clip: 1.0
-  weight_decay: 0.0003
-  input_channels: 13
   seed: 42
+
+  # ── Optimiser ─────────────────────────────────────────────────────────────
+  learning_rate: 0.0005
+  weight_decay: 0.0003
+  gradient_clip: 1.0
+
+  # ── Scheduler (ReduceLROnPlateau, monitors val_acc) ───────────────────────
+  scheduler_patience: 4
+  scheduler_factor: 0.5
+  min_lr: 0.000001
+
+  # ── Stopping ──────────────────────────────────────────────────────────────
+  epochs: 120
+  early_stopping_patience: 20
+
+  # ── Loss ──────────────────────────────────────────────────────────────────
+  label_smoothing: 0.05   # Stage 1 value; overridden per stage by curriculum
+  use_class_weights: true
+  use_weighted_sampler: true
+
+  # ── Curriculum learning ───────────────────────────────────────────────────
+  # Set to true to enable two-stage vocal-only → polyphonic curriculum (RQ4).
+  # Set to false for standard single-pass training.
+  use_curriculum: true
+
+  # ── CNN-LSTM hyperparameters ───────────────────────────────────────────────
   hidden_size: 128
   num_layers: 1
   dropout: 0.35
   bidirectional: true
   use_attention: true
+  attn_hidden_dim: 32
   norm_type: group
-  scheduler_patience: 4
-  scheduler_factor: 0.5
-  min_lr: 0.000001
-  label_smoothing: 0.05
-  num_workers: 0
-  use_weighted_sampler: true
-  use_class_weights: true
+
+  # ── Audio Transformer hyperparameters ─────────────────────────────────────
+  # Used when training with --model transformer
+  transformer:
+    d_model: 128
+    nhead: 4
+    num_layers: 2
+    dim_feedforward: 256
+    dropout: 0.3
+    max_seq_len: 500

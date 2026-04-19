@@ -1,69 +1,91 @@
-# Virtual environments
+# Python
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Environment
+.env
+!.env.example
 .venv/
 venv/
 env/
 
-# Python cache
-__pycache__/
-*.py[cod]
-*.pyo
-*.pyd
-.pytest_cache/
-.mypy_cache/
+# Jupyter
 .ipynb_checkpoints/
 
-# Logs and generated outputs
-logs/
-results/
-outputs/
-
-# Generated arrays
-*.npy
-*.npz
-*.tmp.npy
-
-# Data
-data/processed/
-data/processed_datasets/
-data/manifests/
-data/demucs_output/
-data/Humming Audio/
-data/humming_queries/
-data/song_references/
-data/raw/
-data/Original Songs/
-data/hummed/
-
-# Audio files
-*.wav
-*.mp3
-*.m4a
-*.flac
-
-# Model checkpoints
-/models/
-*.pth
-*.pt
-*.ckpt
-
-# Keep source model code
-!src/fyp_title11/models/
-!src/fyp_title11/models/__init__.py
-!src/fyp_title11/models/*.py
-
-# Temporary files
-temp_record.wav
-temp_upload.wav
-*.tmp
-*.temp
-
-# Environment files
-.env
-.env.*
-!.env.example
-
-# Editor / OS files
-.vscode/
+# IDE / editor
 .idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
 .DS_Store
 Thumbs.db
+
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# Model weights
+models/**/*.pth
+models/**/*.pt
+!models/.gitkeep
+
+# Logs
+logs/
+
+# Outputs / generated retrieval files
+outputs/reference_feature_cache/
+outputs/*.csv
+outputs/hybrid_retrieval_*_partial.*
+outputs/*_partial.json
+
+# Generated visualizations
+results/visualizations/*.png
+results/visualizations/*.pdf
+
+# Data
+# Ignore everything in data by default
+data/*
+
+# Keep lightweight docs / metadata / manifests
+!data/README_DATA.md
+!data/manifests/
+!data/manifests/queries.csv
+!data/manifests/songs.csv
+!data/manifests/splits.csv
+
+!data/raw/
+data/raw/*
+!data/raw/metadata/
+!data/raw/metadata/songs_metadata.csv
+
+!data/hummed/
+data/hummed/*
+!data/hummed/metadata/
+!data/hummed/metadata/hummed_metadata.csv
+
+# Explicitly ignore heavy audio / generated folders
+data/demucs_output/
+data/hummed/recordings/
+data/Humming Audio/
+data/humming_queries/
+data/Original Songs/
+data/processed/
+data/raw/original_songs/
+data/song_references/
+
+# Ignore spreadsheet exports unless you explicitly decide to keep them
+data/*.xlsx
+data/*.xls

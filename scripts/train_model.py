@@ -23,6 +23,7 @@ sys.path.insert(0, str(project_root / "src"))
 
 from fyp_title11.data.dataset import load_class_map, resolve_split_dataset
 from fyp_title11.models.cnn_lstm import CNNLSTMModel
+from fyp_title11.models.audio_transformer import AudioTransformer
 
 log_dir = project_root / "logs"
 log_dir.mkdir(parents=True, exist_ok=True)
@@ -47,7 +48,8 @@ logger = logging.getLogger(__name__)
 SEED = 42
 
 MODEL_REGISTRY: dict[str, Any] = {
-    "cnn_lstm": CNNLSTMModel,
+    "cnn_lstm":          CNNLSTMModel,
+    "audio_transformer": AudioTransformer,
 }
 
 
@@ -63,9 +65,11 @@ def set_seed(seed: int = SEED) -> None:
 
 
 def load_config() -> dict:
-    """
-    Load config/training_config.yaml if available.
-    Then upgrade it toward an accuracy-focused setup for larger song counts.
+    """Load training configuration from config/training_config.yaml.
+
+    The YAML file is the single source of truth. Defaults are only used
+    when a key is entirely absent from the file -- not to override explicit
+    user choices. This enables clean hyperparameter search.
     """
     config_path = project_root / "config" / "training_config.yaml"
     loaded_conf: dict[str, Any] = {}
@@ -76,46 +80,32 @@ def load_config() -> dict:
             if isinstance(loaded, dict) and "training" in loaded and isinstance(loaded["training"], dict):
                 loaded_conf = loaded["training"]
 
-    conf = {
+    # Sensible defaults -- only applied when the key is absent from YAML.
+    defaults = {
         "batch_size": 8,
-        "learning_rate": 1e-3,
+        "learning_rate": 3e-4,
         "epochs": 120,
         "early_stopping_patience": 20,
         "gradient_clip": 1.0,
-        "weight_decay": 1e-4,
-        "input_channels": 13,
+        "weight_decay": 1e-3,
+        "input_channels": 39,   # n_mfcc(13) * 3 (MFCC + delta + delta-delta)
         "seed": 42,
         "hidden_size": 128,
         "num_layers": 1,
-        "dropout": 0.2,
+        "dropout": 0.3,
         "bidirectional": True,
         "use_attention": True,
         "norm_type": "group",
         "scheduler_patience": 5,
         "scheduler_factor": 0.5,
         "min_lr": 1e-6,
-        "label_smoothing": 0.0,
+        "label_smoothing": 0.1,
         "num_workers": 0,
         "use_weighted_sampler": True,
         "use_class_weights": True,
     }
-
-    # Let user config override, then lift clearly weak small-data values.
-    conf.update(loaded_conf)
-
-    conf["batch_size"] = max(int(conf.get("batch_size", 8)), 8)
-    conf["learning_rate"] = max(float(conf.get("learning_rate", 1e-3)), 1e-3)
-    conf["epochs"] = max(int(conf.get("epochs", 120)), 120)
-    conf["early_stopping_patience"] = max(int(conf.get("early_stopping_patience", 20)), 20)
-    conf["weight_decay"] = min(float(conf.get("weight_decay", 1e-4)), 1e-4)
-    conf["hidden_size"] = max(int(conf.get("hidden_size", 128)), 128)
-    conf["dropout"] = min(float(conf.get("dropout", 0.2)), 0.25)
-    conf["label_smoothing"] = 0.0
-    conf["scheduler_patience"] = max(int(conf.get("scheduler_patience", 5)), 5)
-    conf["min_lr"] = min(float(conf.get("min_lr", 1e-6)), 1e-6)
-    conf["use_weighted_sampler"] = bool(conf.get("use_weighted_sampler", True))
-    conf["use_class_weights"] = bool(conf.get("use_class_weights", True))
-
+    # YAML values always win over defaults.
+    conf = {**defaults, **loaded_conf}
     return conf
 
 
@@ -125,14 +115,29 @@ def build_model(model_name: str, num_classes: int, train_conf: dict):
 
     if model_name == "cnn_lstm":
         return CNNLSTMModel(
-            input_channels=int(train_conf.get("input_channels", 13)),
+            input_channels=int(train_conf.get("input_channels", 39)),
             num_classes=num_classes,
             hidden_size=int(train_conf.get("hidden_size", 128)),
             num_layers=int(train_conf.get("num_layers", 1)),
-            dropout=float(train_conf.get("dropout", 0.2)),
+            dropout=float(train_conf.get("dropout", 0.3)),
             bidirectional=bool(train_conf.get("bidirectional", True)),
             use_attention=bool(train_conf.get("use_attention", True)),
+            attn_hidden_dim=int(train_conf.get("attn_hidden_dim", 32)),
             norm_type=str(train_conf.get("norm_type", "group")),
+        )
+
+    if model_name == "audio_transformer":
+        # Read Transformer settings from the nested 'transformer' block in
+        # training_config.yaml -- consistent with evaluate.py and predict.py.
+        t = train_conf.get("transformer", {})
+        return AudioTransformer(
+            input_channels=int(train_conf.get("input_channels", 39)),
+            num_classes=num_classes,
+            d_model=int(t.get("d_model", 128)),
+            nhead=int(t.get("nhead", 4)),
+            num_layers=int(t.get("num_layers", 2)),
+            dim_feedforward=int(t.get("dim_feedforward", 256)),
+            dropout=float(t.get("dropout", 0.3)),
         )
 
     raise ValueError(f"Unsupported model '{model_name}'.")
@@ -198,7 +203,8 @@ def evaluate_epoch(model, loader, device, criterion):
     model.eval()
 
     total = 0
-    correct = 0
+    correct_top1 = 0
+    correct_top5 = 0
     running_loss = 0.0
 
     with torch.no_grad():
@@ -211,11 +217,19 @@ def evaluate_epoch(model, loader, device, criterion):
 
             running_loss += loss.item() * y.size(0)
             total += y.size(0)
-            correct += (logits.argmax(dim=1) == y).sum().item()
+
+            # Top-1 accuracy
+            correct_top1 += (logits.argmax(dim=1) == y).sum().item()
+
+            # Top-5 accuracy (guarded for when num_classes < 5)
+            k = min(5, logits.size(1))
+            top5_preds = logits.topk(k, dim=1).indices
+            correct_top5 += (top5_preds == y.unsqueeze(1)).any(dim=1).sum().item()
 
     avg_loss = running_loss / max(total, 1)
-    acc = correct / max(total, 1)
-    return avg_loss, acc
+    top1_acc = correct_top1 / max(total, 1)
+    top5_acc = correct_top5 / max(total, 1)
+    return avg_loss, top1_acc, top5_acc
 
 
 def build_balancing(train_dataset, num_classes: int):
@@ -237,7 +251,7 @@ def safe_load_resume(model, optimizer, resume_path: Path, device: torch.device, 
 
     try:
         logger.info("Resuming from %s", resume_path)
-        ckpt = torch.load(resume_path, map_location=device)
+        ckpt = torch_load(resume_path, device)   # uses weights_only=True where supported
         model.load_state_dict(ckpt["model_state"])
         optimizer.load_state_dict(ckpt["optimizer_state"])
         best_val_acc = ckpt.get("best_val_acc", 0.0)
@@ -359,6 +373,7 @@ def train_pipeline(model_name: str = "cnn_lstm") -> None:
         "train_acc": [],
         "val_loss": [],
         "val_acc": [],
+        "val_top5_acc": [],
         "lr": [],
     }
 
@@ -403,7 +418,7 @@ def train_pipeline(model_name: str = "cnn_lstm") -> None:
         train_loss = running_loss / max(total_train, 1)
         train_acc = correct_train / max(total_train, 1)
 
-        val_loss, val_acc = evaluate_epoch(model, val_loader, device, criterion)
+        val_loss, val_acc, val_top5_acc = evaluate_epoch(model, val_loader, device, criterion)
         scheduler.step(val_acc)
 
         current_lr = optimizer.param_groups[0]["lr"]
@@ -412,11 +427,12 @@ def train_pipeline(model_name: str = "cnn_lstm") -> None:
         history["train_acc"].append(train_acc)
         history["val_loss"].append(val_loss)
         history["val_acc"].append(val_acc)
+        history["val_top5_acc"].append(val_top5_acc)
         history["lr"].append(current_lr)
 
         logger.info(
-            "Epoch %03d/%03d | train_loss %.4f | train_acc %.4f | val_loss %.4f | val_acc %.4f | lr %.6f",
-            epoch, epochs, train_loss, train_acc, val_loss, val_acc, current_lr
+            "Epoch %03d/%03d | train_loss %.4f | train_acc %.4f | val_loss %.4f | val_acc %.4f | val_top5 %.4f | lr %.6f",
+            epoch, epochs, train_loss, train_acc, val_loss, val_acc, val_top5_acc, current_lr
         )
 
         if val_acc > best_val_acc:
@@ -473,5 +489,245 @@ def train_pipeline(model_name: str = "cnn_lstm") -> None:
     logger.info("Training complete. Best validation accuracy: %.2f%%", best_val_acc * 100)
 
 
+# -----------------------------------------------------------------------------
+#  Curriculum Learning pipeline
+# -----------------------------------------------------------------------------
+
+def curriculum_train_pipeline(model_name: str = "cnn_lstm") -> None:
+    """Two-stage curriculum learning training pipeline.
+
+    Addresses RQ4: "Can curriculum learning improve model robustness and
+    generalisation in cross-domain humming recognition tasks?"
+
+    Curriculum strategy (Bengio et al., 2009):
+        Stage 1 -- Easy examples (vocal-only):
+            Train on the vocal-isolated split (data/processed/vocal_only/).
+            The model learns the fundamental concept of melody matching without
+            polyphonic interference. This mirrors how humans learn to sing
+            before playing instruments.
+
+        Stage 2 -- Full complexity (polyphonic):
+            Fine-tune on the full polyphonic training set. The model now has
+            a strong melodic prior from Stage 1 and can generalise better
+            to the polyphonic target domain.
+
+    Expected data layout:
+        data/processed/vocal_only/train_data_meta.json   <- Stage 1 training set
+        data/processed/datasets/train_data_meta.json     <- Stage 2 training set
+        data/processed/datasets/val_data_meta.json       <- shared validation set
+
+    If the vocal-only split does not exist, falls back to standard training
+    so this function is always safe to call.
+    """
+    train_conf = load_config()
+    seed = int(train_conf.get("seed", SEED))
+    set_seed(seed)
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    logger.info("[Curriculum] Training on device: %s", device)
+
+    data_dir = project_root / "data" / "processed" / "datasets"
+    vocal_only_dir = project_root / "data" / "processed" / "vocal_only"
+
+    class_map = load_class_map(data_dir / "classes.json")
+    num_classes = len(class_map)
+
+    val_dataset = resolve_split_dataset(data_dir, "val_data")
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=int(train_conf.get("batch_size", 8)),
+        shuffle=False,
+        num_workers=int(train_conf.get("num_workers", 0)),
+        pin_memory=torch.cuda.is_available(),
+    )
+
+    model = build_model(model_name, num_classes=num_classes, train_conf=train_conf).to(device)
+    model_dir = project_root / "models" / model_name
+    model_dir.mkdir(parents=True, exist_ok=True)
+
+    # -- Define curriculum stages ------------------------------------------
+    # Each stage can override training parameters to control difficulty.
+    stages = []
+
+    vocal_only_meta = vocal_only_dir / "train_data_meta.json"
+    if vocal_only_meta.exists():
+        stages.append({
+            "name": "stage1_vocal_only",
+            "data_dir": vocal_only_dir,
+            "stem": "train_data",
+            "epochs": max(int(train_conf.get("epochs", 120)) // 3, 20),
+            "label_smoothing": 0.0,    # strict learning from clean data
+            "lr_factor": 1.0,
+        })
+        logger.info("[Curriculum] Vocal-only split found -- Stage 1 enabled.")
+    else:
+        logger.warning(
+            "[Curriculum] Vocal-only split not found at %s. "
+            "Skipping Stage 1 and running standard training only.",
+            vocal_only_dir,
+        )
+
+    stages.append({
+        "name": "stage2_polyphonic",
+        "data_dir": data_dir,
+        "stem": "train_data",
+        "epochs": int(train_conf.get("epochs", 120)),
+        "label_smoothing": 0.1,    # slight smoothing for noisy polyphonic data
+        "lr_factor": 0.3,          # lower LR for fine-tuning stage
+    })
+
+    best_val_acc_overall = 0.0
+    checkpoint_path = model_dir / "best_model_curriculum.pth"
+    history_all: dict = {"stage": [], "epoch": [], "train_loss": [],
+                         "train_acc": [], "val_loss": [], "val_acc": [],
+                         "val_top5_acc": []}
+
+    for stage in stages:
+        logger.info("\n%s\n[Curriculum] Starting %s (%d epochs)\n%s",
+                    "=" * 60, stage["name"], stage["epochs"], "=" * 60)
+
+        # Load this stage's training data
+        stage_train_dataset = resolve_split_dataset(stage["data_dir"], stage["stem"])
+        _, _, class_weights_np, sample_weights = build_balancing(stage_train_dataset, num_classes)
+
+        sampler = WeightedRandomSampler(
+            weights=torch.as_tensor(sample_weights, dtype=torch.double),
+            num_samples=len(sample_weights),
+            replacement=True,
+        )
+        stage_loader = DataLoader(
+            stage_train_dataset,
+            batch_size=int(train_conf.get("batch_size", 8)),
+            sampler=sampler,
+            shuffle=False,
+            num_workers=int(train_conf.get("num_workers", 0)),
+            pin_memory=torch.cuda.is_available(),
+        )
+
+        # Reinitialise optimiser for each stage (allows LR adjustment)
+        stage_lr = float(train_conf.get("learning_rate", 3e-4)) * stage["lr_factor"]
+        optimizer = optim.AdamW(
+            model.parameters(),
+            lr=stage_lr,
+            weight_decay=float(train_conf.get("weight_decay", 1e-3)),
+        )
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer,
+            mode="max",
+            patience=int(train_conf.get("scheduler_patience", 5)),
+            factor=float(train_conf.get("scheduler_factor", 0.5)),
+            min_lr=float(train_conf.get("min_lr", 1e-6)),
+        )
+        class_weights_tensor = torch.as_tensor(class_weights_np, dtype=torch.float32, device=device)
+        criterion = nn.CrossEntropyLoss(
+            weight=class_weights_tensor,
+            label_smoothing=stage["label_smoothing"],
+        )
+
+        patience = int(train_conf.get("early_stopping_patience", 20))
+        grad_clip = float(train_conf.get("gradient_clip", 1.0))
+        no_improve = 0
+        best_stage_val_acc = 0.0
+
+        for epoch in range(1, stage["epochs"] + 1):
+            model.train()
+            running_loss = 0.0
+            total_train = 0
+            correct_train = 0
+
+            for X, y in stage_loader:
+                X, y = X.to(device), y.to(device)
+                optimizer.zero_grad(set_to_none=True)
+                logits = extract_logits(model(X))
+                loss = criterion(logits, y)
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=grad_clip)
+                optimizer.step()
+                running_loss += loss.item() * y.size(0)
+                total_train += y.size(0)
+                correct_train += (logits.argmax(dim=1) == y).sum().item()
+
+            train_loss = running_loss / max(total_train, 1)
+            train_acc = correct_train / max(total_train, 1)
+            val_loss, val_acc, val_top5 = evaluate_epoch(model, val_loader, device, criterion)
+            scheduler.step(val_acc)
+            current_lr = optimizer.param_groups[0]["lr"]
+
+            logger.info(
+                "[%s] Epoch %03d | train_loss %.4f | train_acc %.4f "
+                "| val_acc %.4f | val_top5 %.4f | lr %.2e",
+                stage["name"], epoch, train_loss, train_acc, val_acc, val_top5, current_lr,
+            )
+
+            history_all["stage"].append(stage["name"])
+            history_all["epoch"].append(epoch)
+            history_all["train_loss"].append(train_loss)
+            history_all["train_acc"].append(train_acc)
+            history_all["val_loss"].append(val_loss)
+            history_all["val_acc"].append(val_acc)
+            history_all["val_top5_acc"].append(val_top5)
+
+            if val_acc > best_val_acc_overall:
+                best_val_acc_overall = val_acc
+                best_stage_val_acc = val_acc
+                no_improve = 0
+                torch.save(model.state_dict(), checkpoint_path)
+                logger.info("[Curriculum] New best model saved (val_acc=%.4f)", val_acc)
+            else:
+                no_improve += 1
+                if no_improve >= patience:
+                    logger.info("[Curriculum] Early stopping at epoch %d", epoch)
+                    break
+
+        logger.info("[Curriculum] %s complete. Best val_acc: %.4f",
+                    stage["name"], best_stage_val_acc)
+
+    # Save curriculum training summary
+    results_dir = project_root / "results" / "evaluations"
+    results_dir.mkdir(parents=True, exist_ok=True)
+    import json as _json
+    with open(results_dir / f"{model_name}_curriculum_summary.json", "w", encoding="utf-8") as f:
+        _json.dump({
+            "model": model_name,
+            "stages": [s["name"] for s in stages],
+            "best_val_accuracy": best_val_acc_overall,
+            "history_length": len(history_all["epoch"]),
+        }, f, indent=2)
+
+    logger.info("\n[Curriculum] Training complete. Best overall val_acc: %.2f%%",
+                best_val_acc_overall * 100)
+
+
+# -----------------------------------------------------------------------------
+#  CLI entrypoint -- exactly one __main__ block
+# -----------------------------------------------------------------------------
+
 if __name__ == "__main__":
-    train_pipeline("cnn_lstm")
+    import argparse as _argparse
+
+    parser = _argparse.ArgumentParser(
+        description="Train a Hum2Tune melody recognition model.",
+        formatter_class=_argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument(
+        "--model",
+        type=str,
+        default="cnn_lstm",
+        choices=sorted(MODEL_REGISTRY),
+        help="Model architecture to train.",
+    )
+    parser.add_argument(
+        "--curriculum",
+        action="store_true",
+        default=False,
+        help=(
+            "Use the two-stage curriculum learning pipeline (vocal-only -> polyphonic). "
+            "Addresses RQ4. Requires data/processed/vocal_only/ split to exist."
+        ),
+    )
+    args = parser.parse_args()
+
+    if args.curriculum:
+        curriculum_train_pipeline(args.model)
+    else:
+        train_pipeline(args.model)

@@ -1,47 +1,84 @@
-# Hum2Tune Configuration
+# Hum2Tune — Master Configuration
+# Authoritative values for audio processing, models, training, and evaluation.
+# Note: training_config.yaml takes precedence for training-specific settings.
 
 project:
   name: "Hum2Tune"
   version: "1.1.0"
-  author: "FYP Student"
-  description: "Humming-based music recognition with DTW baseline and CNN-LSTM model"
+  author: "Wong Xuan Kai"
+  description: "Humming-based music recognition with DTW baseline and CNN-LSTM/Transformer models"
 
 audio:
   sample_rate: 22050
-  duration: 30.0
-  n_mels: 128
-  n_mfcc: 13
+  duration: 10.0
+  n_mfcc: 13              # base MFCC count; feature channels = n_mfcc * 3 = 39
   n_fft: 2048
   hop_length: 512
-  min_freq: 80
-  max_freq: 8000
+  win_length: 2048
+  # Vocal frequency range — constrains Mel filterbank to human singing range
+  fmin: 65.0              # C2 (~65 Hz)
+  fmax: 2093.0            # C7 (~2093 Hz)
+  trim_silence: true
+  trim_top_db: 20
+  normalize_features: true
 
 models:
+  # ── CNN-LSTM ───────────────────────────────────────────────────────────────
+  # input_channels = n_mfcc * 3 = 13 * 3 = 39
   cnn_lstm:
-    input_channels: 13
-    hidden_size: 64
+    input_channels: 39    # MFCC (13) + delta (13) + delta-delta (13)
+    hidden_size: 128
     num_layers: 1
-    dropout: 0.4
+    dropout: 0.35
     bidirectional: true
     use_attention: true
+    attn_hidden_dim: 32
     norm_type: "group"
 
+  # ── Audio Transformer ──────────────────────────────────────────────────────
+  # Same input_channels=39 so both architectures are directly comparable.
+  transformer:
+    input_channels: 39    # must match cnn_lstm.input_channels for fair ablation
+    d_model: 128
+    nhead: 4
+    num_layers: 2
+    dim_feedforward: 256
+    dropout: 0.3
+    max_seq_len: 500
+
+  # ── Pitch CNN (fusion branch) ──────────────────────────────────────────────
+  pitch_cnn:
+    input_size: 1
+    dropout: 0.4
+    norm_type: "group"
+
+  # ── DTW baseline ──────────────────────────────────────────────────────────
   dtw:
     distance_metric: "euclidean"
     top_k: 5
 
 training:
-  batch_size: 4
-  learning_rate: 0.0003
-  epochs: 80
-  early_stopping_patience: 10
+  batch_size: 8
+  learning_rate: 0.0005
+  epochs: 120
+  early_stopping_patience: 20
   gradient_clip: 1.0
-  weight_decay: 0.001
+  weight_decay: 0.0003
   scheduler_patience: 4
   scheduler_factor: 0.5
-  min_lr: 0.00001
+  min_lr: 0.000001
   seed: 42
+  use_curriculum: true
 
 evaluation:
-  metrics: ["accuracy", "top_k_accuracy", "mrr", "macro_f1", "weighted_f1"]
-  top_k: 3
+  # Metrics reported for both the classification and retrieval paths
+  metrics:
+    - top_1_accuracy
+    - top_3_accuracy
+    - top_5_accuracy
+    - mrr
+    - map_at_10
+    - ndcg_at_10
+    - macro_f1
+    - weighted_f1
+  top_k_retrieval: 5

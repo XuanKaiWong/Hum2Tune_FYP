@@ -20,6 +20,7 @@ sys.path.insert(0, str(project_root / "src"))
 
 from fyp_title11.data.dataset import load_class_map
 from fyp_title11.models.cnn_lstm import CNNLSTMModel
+from fyp_title11.models.audio_transformer import AudioTransformer
 from fyp_title11.tokenization.feature_extractor import FeatureExtractor
 
 # ---------------------------------------------------------------------
@@ -85,7 +86,7 @@ def load_training_config() -> dict[str, Any]:
                 return loaded["training"]
 
     return {
-        "input_channels": 13,
+        "input_channels": 39,
         "hidden_size": 64,
         "num_layers": 1,
         "dropout": 0.4,
@@ -95,15 +96,29 @@ def load_training_config() -> dict[str, Any]:
     }
 
 
-def build_model(num_classes: int, train_conf: dict[str, Any]) -> CNNLSTMModel:
+def build_model(model_name: str, num_classes: int, train_conf: dict[str, Any]):
+    """Instantiate the correct architecture based on model_name."""
+    if model_name == "audio_transformer":
+        t = train_conf.get("transformer", {})
+        return AudioTransformer(
+            input_channels=int(train_conf.get("input_channels", 39)),
+            num_classes=num_classes,
+            d_model=int(t.get("d_model", 128)),
+            nhead=int(t.get("nhead", 4)),
+            num_layers=int(t.get("num_layers", 2)),
+            dim_feedforward=int(t.get("dim_feedforward", 256)),
+            dropout=float(t.get("dropout", 0.3)),
+        )
+    # Default: cnn_lstm
     return CNNLSTMModel(
-        input_channels=int(train_conf.get("input_channels", 13)),
+        input_channels=int(train_conf.get("input_channels", 39)),
         num_classes=num_classes,
-        hidden_size=int(train_conf.get("hidden_size", 64)),
+        hidden_size=int(train_conf.get("hidden_size", 128)),
         num_layers=int(train_conf.get("num_layers", 1)),
-        dropout=float(train_conf.get("dropout", 0.4)),
+        dropout=float(train_conf.get("dropout", 0.35)),
         bidirectional=bool(train_conf.get("bidirectional", True)),
         use_attention=bool(train_conf.get("use_attention", True)),
+        attn_hidden_dim=int(train_conf.get("attn_hidden_dim", 32)),
         norm_type=str(train_conf.get("norm_type", "group")),
     )
 
@@ -207,14 +222,14 @@ def predict(
     top_k: int = DEFAULT_TOP_K,
     confidence_threshold: float = DEFAULT_CONFIDENCE_THRESHOLD,
 ) -> None:
-    if model_name != DEFAULT_MODEL_NAME:
+    supported = ("cnn_lstm", "audio_transformer")
+    if model_name not in supported:
         raise ValueError(
-            f"Unsupported model '{model_name}'. "
-            f"Only '{DEFAULT_MODEL_NAME}' is supported in the cleaned project."
+            f"Unsupported model '{model_name}'. Choose from: {supported}"
         )
 
     train_conf = load_training_config()
-    expected_channels = int(train_conf.get("input_channels", 13))
+    expected_channels = int(train_conf.get("input_channels", 39))
     class_names = load_class_names()
 
     features = prepare_features(
@@ -226,6 +241,7 @@ def predict(
     logger.info("Running prediction on device: %s", device)
 
     model = build_model(
+        model_name=model_name,
         num_classes=len(class_names),
         train_conf=train_conf,
     ).to(device)

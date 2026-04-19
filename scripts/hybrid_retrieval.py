@@ -65,7 +65,7 @@ def canonical_title(name: str) -> str:
     """
     name = Path(name).stem
     name = unicodedata.normalize("NFKD", name)
-    name = name.replace("’", "'").replace("‘", "'").replace("_", " ")
+    name = name.replace("'", "'").replace("'", "'").replace("_", " ")
     name = re.sub(r"[^a-zA-Z0-9]+", " ", name.lower()).strip()
     name = re.sub(r"\s+", " ", name)
     return ALIASES.get(name, name)
@@ -290,14 +290,46 @@ def compute_rank_metrics(ranked_df: pd.DataFrame, true_title_key: str):
 
 
 def summarize(df: pd.DataFrame) -> dict:
+    """Compute retrieval summary metrics from ranked results.
+
+    Metrics reported:
+      Top-1, Top-3, Top-5: fraction of queries where the correct song
+        appears within the top K results.
+      MRR: Mean Reciprocal Rank -- average of 1/rank for each query.
+      MAP@10: Mean Average Precision at rank 10 -- standard IR metric
+        that rewards correct answers near the top of the ranking.
+      NDCG@10: Normalised Discounted Cumulative Gain at rank 10 -- applies
+        a logarithmic discount to penalise correct answers at lower ranks.
+    """
     if len(df) == 0:
-        return {"count": 0, "top1": None, "top3": None, "top5": None, "mrr": None}
+        return {"count": 0, "top1": None, "top3": None, "top5": None,
+                "mrr": None, "map_at_10": None, "ndcg_at_10": None}
+
+    # MRR from pre-computed per-query rank
+    mrr = float(df["mrr"].mean())
+
+    # MAP@10: treat each query as a single-relevant-item retrieval task.
+    # rank_of_true_song gives position in the full ranked list.
+    map_at_10_vals = []
+    ndcg_at_10_vals = []
+    for _, row in df.iterrows():
+        rank = row.get("rank_of_true_song")
+        if rank is not None and not pd.isna(rank) and int(rank) <= 10:
+            r = int(rank)
+            map_at_10_vals.append(1.0 / r)           # AP for single-relevant item = 1/rank
+            ndcg_at_10_vals.append(1.0 / np.log2(r + 1))  # DCG discount / IDCG
+        else:
+            map_at_10_vals.append(0.0)
+            ndcg_at_10_vals.append(0.0)
+
     return {
         "count": int(len(df)),
         "top1": float(df["top1"].mean()),
         "top3": float(df["top3"].mean()),
         "top5": float(df["top5"].mean()),
-        "mrr": float(df["mrr"].mean()),
+        "mrr": mrr,
+        "map_at_10": float(np.mean(map_at_10_vals)),
+        "ndcg_at_10": float(np.mean(ndcg_at_10_vals)),
     }
 
 
@@ -596,34 +628,36 @@ def run(
                 norm[valid_mask] = norm_valid
             cand_df[col + "_norm"] = norm
 
+        # -- Vectorised fused score computation --------------------------
+        # Replaces the previous iterrows() loop (O(N) Python overhead per row).
+        # Each distance column is normalised; scores are weighted and summed.
         score_column_map = {
-            "vocal_pitch": "vocal_pitch_dist",
-            "vocal_chroma": "vocal_chroma_dist",
-            "orig_chroma": "orig_chroma_dist",
+            "vocal_pitch":    "vocal_pitch_dist",
+            "vocal_chroma":   "vocal_chroma_dist",
+            "orig_chroma":    "orig_chroma_dist",
             "novocal_chroma": "novocal_chroma_dist",
         }
 
-        fused_scores = []
-        for _, row in cand_df.iterrows():
-            available = {}
+        fused = np.zeros(len(cand_df), dtype=np.float32)
+        weight_sums = np.zeros(len(cand_df), dtype=np.float32)
 
-            for score_name, weight in weights.items():
-                col_name = score_column_map[score_name]
-                raw_val = row.get(col_name)
-                if weight > 0 and pd.notna(raw_val):
-                    available[col_name] = weight
-
-            if not available:
-                fused_scores.append(np.inf)
+        for score_name, weight in weights.items():
+            if weight <= 0:
                 continue
+            col_norm = score_column_map[score_name] + "_norm"
+            if col_norm not in cand_df.columns:
+                continue
+            vals = cand_df[col_norm].to_numpy(dtype=np.float32)
+            valid = np.isfinite(vals)
+            fused[valid] += weight * vals[valid]
+            weight_sums[valid] += weight
 
-            weight_sum = sum(available.values())
-            score = 0.0
-            for col_name, weight in available.items():
-                score += (weight / weight_sum) * float(row[col_name + "_norm"])
-            fused_scores.append(score)
+        # Where no feature was available, assign inf so the candidate
+        # sinks to the bottom of the ranking.
+        with np.errstate(invalid="ignore", divide="ignore"):
+            fused_scores_arr = np.where(weight_sums > 0, fused / weight_sums, np.inf)
 
-        cand_df["fused_score"] = fused_scores
+        cand_df["fused_score"] = fused_scores_arr
         cand_df = cand_df.sort_values(
             ["fused_score", "candidate_title_display"],
             ascending=[True, True],
@@ -677,6 +711,140 @@ def run(
     print(json.dumps(summary, indent=2))
     print(f"Elapsed time: {elapsed/60:.2f} minutes")
     print(f"Saved final files under: {OUTPUT_DIR}")
+
+
+def rank_query(
+    query_path: "Path",
+    ref_features: dict,
+    weights: dict,
+    shortlist_size: int = 10,
+    top_k: int = 3,
+) -> "pd.DataFrame":
+    """Rank all reference songs against a single query audio file.
+
+    This is the shared per-query scoring function used by both the batch
+    evaluation pipeline (run()) and the Streamlit app (app.py), eliminating
+    the duplicated ranking logic that previously existed in both files.
+
+    Args:
+        query_path:    Path to the query audio file (humming/recording).
+        ref_features:  Dict mapping title_key -> ReferenceFeatures, pre-loaded.
+        weights:       Score weight dict, e.g. {"vocal_pitch": 0.6, ...}.
+        shortlist_size: Number of candidates kept after coarse chroma filtering.
+        top_k:         Number of ranked results to return.
+
+    Returns:
+        DataFrame with columns [candidate_title_display, candidate_title_key,
+        vocal_pitch_dist, vocal_chroma_dist, fused_score], sorted ascending
+        by fused_score (lower = better match). Only top_k rows returned.
+
+    Raises:
+        ValueError: If pitch/chroma features cannot be extracted from query.
+    """
+    import pandas as pd
+
+    q_pitch, q_chroma = safe_extract_query_features(query_path)
+    q_chroma_small = downsample_chroma(q_chroma, factor=4)
+
+    # -- Stage 1: coarse chroma shortlist ----------------------------------
+    coarse_rows = []
+    for ref_key, feat in ref_features.items():
+        coarse_score = np.inf
+        for chroma_attr in ("vocals_chroma", "original_chroma", "no_vocals_chroma"):
+            ref_chroma = getattr(feat, chroma_attr, None)
+            if ref_chroma is not None:
+                try:
+                    s = dtw_chroma_distance(q_chroma_small, downsample_chroma(ref_chroma, factor=4))
+                    coarse_score = min(coarse_score, s)
+                except Exception:
+                    pass
+        coarse_rows.append({
+            "candidate_title_key": ref_key,
+            "candidate_title_display": feat.title_display,
+            "coarse_score": coarse_score,
+        })
+
+    coarse_df = pd.DataFrame(coarse_rows).sort_values(
+        ["coarse_score", "candidate_title_display"], ascending=[True, True]
+    )
+    shortlist_keys = coarse_df.head(shortlist_size)["candidate_title_key"].tolist()
+
+    # -- Stage 2: fine-grained ranking on shortlist ------------------------
+    score_column_map = {
+        "vocal_pitch":    "vocal_pitch_dist",
+        "vocal_chroma":   "vocal_chroma_dist",
+        "orig_chroma":    "orig_chroma_dist",
+        "novocal_chroma": "novocal_chroma_dist",
+    }
+    fine_rows = []
+    for ref_key in shortlist_keys:
+        feat = ref_features[ref_key]
+        row: dict = {
+            "candidate_title_display": feat.title_display,
+            "candidate_title_key": ref_key,
+            "vocal_pitch_dist":    np.nan,
+            "vocal_chroma_dist":   np.nan,
+            "orig_chroma_dist":    np.nan,
+            "novocal_chroma_dist": np.nan,
+        }
+        if feat.vocals_pitch is not None:
+            try:
+                row["vocal_pitch_dist"] = subseq_dtw_distance(q_pitch, feat.vocals_pitch)
+            except Exception:
+                pass
+        if feat.vocals_chroma is not None:
+            try:
+                row["vocal_chroma_dist"] = dtw_chroma_distance(q_chroma, feat.vocals_chroma)
+            except Exception:
+                pass
+        if feat.original_chroma is not None:
+            try:
+                row["orig_chroma_dist"] = dtw_chroma_distance(q_chroma, feat.original_chroma)
+            except Exception:
+                pass
+        if feat.no_vocals_chroma is not None:
+            try:
+                row["novocal_chroma_dist"] = dtw_chroma_distance(q_chroma, feat.no_vocals_chroma)
+            except Exception:
+                pass
+        fine_rows.append(row)
+
+    cand_df = pd.DataFrame(fine_rows)
+    if cand_df.empty:
+        return cand_df
+
+    # Normalise each distance column within the shortlist
+    for col in [v for v in score_column_map.values()]:
+        values = cand_df[col].to_numpy(dtype=np.float32)
+        valid = np.isfinite(values)
+        norm = np.ones_like(values, dtype=np.float32)
+        if valid.any():
+            norm[valid] = minmax_normalize(values[valid])
+        cand_df[col + "_norm"] = norm
+
+    # Vectorised weighted fusion
+    fused = np.zeros(len(cand_df), dtype=np.float32)
+    weight_sums = np.zeros(len(cand_df), dtype=np.float32)
+    for score_name, weight in weights.items():
+        if weight <= 0:
+            continue
+        col_norm = score_column_map.get(score_name, "") + "_norm"
+        if col_norm not in cand_df.columns:
+            continue
+        vals = cand_df[col_norm].to_numpy(dtype=np.float32)
+        valid = np.isfinite(vals)
+        fused[valid] += weight * vals[valid]
+        weight_sums[valid] += weight
+
+    with np.errstate(invalid="ignore", divide="ignore"):
+        fused_final = np.where(weight_sums > 0, fused / weight_sums, np.inf)
+
+    cand_df["fused_score"] = fused_final
+    return (
+        cand_df.sort_values(["fused_score", "candidate_title_display"], ascending=[True, True])
+        .reset_index(drop=True)
+        .head(top_k)
+    )
 
 
 if __name__ == "__main__":

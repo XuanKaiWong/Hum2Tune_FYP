@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import os
 import sys
 import tempfile
@@ -17,7 +18,7 @@ from audiorecorder import audiorecorder
 
 matplotlib.use("Agg")
 
-# ─── Path Setup ───────────────────────────────────────────────────────────────
+# --- Path Setup ---------------------------------------------------------------
 current_file = Path(__file__).resolve()
 project_root = current_file.parent.parent.parent
 src_path = project_root / "src"
@@ -27,39 +28,32 @@ if str(project_root) not in sys.path:
 if str(src_path) not in sys.path:
     sys.path.insert(0, str(src_path))
 
-# ─── Imports ──────────────────────────────────────────────────────────────────
+# --- Imports ------------------------------------------------------------------
 try:
     from scripts.hybrid_retrieval import (
         SR,
         discover_references,
-        downsample_chroma,
-        dtw_chroma_distance,
-        minmax_normalize,
-        safe_extract_query_features,
+        mode_weights,
+        rank_query,
         safe_extract_reference_features,
-        subseq_dtw_distance,
     )
 except ImportError as e:
     st.error(f"❌ Import Error: {e}")
     st.stop()
 
-# ─── Retrieval Settings ───────────────────────────────────────────────────────
+# --- Retrieval Settings -------------------------------------------------------
 RETRIEVAL_MODE_LABEL = "Vocal-only DTW Retrieval"
 
-# Demo setting: faster than 20, still reasonable
+# Demo settings: small shortlist keeps the app fast for live demonstration
 SHORTLIST_SIZE = 10
 TOP_K_DISPLAY = 3
 
-# Exact match only when clearly dominant
+# Confidence thresholds: top result shown as "exact match" only when the
+# fused score is clearly dominant over the second-best candidate.
 EXACT_SCORE_THRESHOLD = 0.18
 EXACT_GAP_THRESHOLD = 0.10
 
-VOCAL_ONLY_WEIGHTS = {
-    "vocal_pitch": 0.60,
-    "vocal_chroma": 0.40,
-}
-
-# ─── Page Config ──────────────────────────────────────────────────────────────
+# --- Page Config --------------------------------------------------------------
 st.set_page_config(
     page_title="Hum2Tune",
     page_icon="🎵",
@@ -67,7 +61,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# ─── Global CSS ───────────────────────────────────────────────────────────────
+# --- Global CSS ---------------------------------------------------------------
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:wght@300;400;500&display=swap');
@@ -186,7 +180,7 @@ html, body, [class*="css"] {
 .tip-box     { background:rgba(108,99,255,0.08); border:1px solid rgba(108,99,255,0.25); border-radius:14px; padding:1.1rem 1.4rem; margin-top:1.2rem; }
 .tip-title   { font-family:'Syne',sans-serif; font-size:0.78rem; letter-spacing:2px; text-transform:uppercase; color:var(--accent); margin-bottom:0.6rem; }
 .tip-item    { font-size:0.85rem; color:var(--muted); margin-bottom:0.3rem; }
-.tip-item::before { content:'→ '; color:var(--accent); }
+.tip-item::before { content:'-> '; color:var(--accent); }
 
 .status-row { display:flex; align-items:center; gap:0.6rem; font-size:0.82rem; color:var(--muted); margin-bottom:0.4rem; }
 .dot        { width:8px; height:8px; border-radius:50%; flex-shrink:0; }
@@ -225,7 +219,7 @@ html, body, [class*="css"] {
 </style>
 """, unsafe_allow_html=True)
 
-# ─── Session State ─────────────────────────────────────────────────────────────
+# --- Session State -------------------------------------------------------------
 if "recorder_key" not in st.session_state:
     st.session_state.recorder_key = 0
 if "result" not in st.session_state:
@@ -302,132 +296,48 @@ def ensure_reference_features_loaded() -> bool:
 
 
 def retrieve_audio(audio_path: str, top_k: int = TOP_K_DISPLAY) -> dict:
+    """Retrieve the closest matching songs for a query audio file.
+
+    Delegates all ranking logic to hybrid_retrieval.rank_query() -- the single
+    authoritative implementation of the two-stage coarse-to-fine retrieval.
+    This eliminates the code duplication that previously existed between the
+    app and the batch evaluation pipeline.
+
+    Returns a result dict with keys:
+        status:   "exact" | "similar" | "none" | "error"
+        top_song: display name of the best match (if found)
+        top_conf: match strength [0, 1]
+        similar:  list of (name, strength) for runner-up candidates
+        audio:    raw waveform array (for spectrogram rendering)
+        sr:       sample rate of the loaded audio
+    """
     try:
         if not ensure_reference_features_loaded():
-            return {
-                "status": "error",
-                "error_msg": "Reference features could not be loaded.",
-            }
+            return {"status": "error", "error_msg": "Reference features could not be loaded."}
 
         reference_features = st.session_state.reference_features
 
         audio, sr = librosa.load(audio_path, sr=SR, mono=True)
 
         if len(audio) < sr * 2.5:
-            return {
-                "status": "none",
-                "top_conf": 0.0,
-                "reason": "short",
-            }
+            return {"status": "none", "top_conf": 0.0, "reason": "short"}
 
         rms = float(np.sqrt(np.mean(audio ** 2)))
         if rms < 0.01:
-            return {
-                "status": "none",
-                "top_conf": 0.0,
-                "reason": "silent",
-            }
+            return {"status": "none", "top_conf": 0.0, "reason": "silent"}
 
-        q_pitch, q_chroma = safe_extract_query_features(Path(audio_path))
-        q_chroma_small = downsample_chroma(q_chroma, factor=4)
-
-        # Stage 1: coarse shortlist
-        coarse_rows = []
-        for ref_key, feat in reference_features.items():
-            coarse_score = np.inf
-            if feat.vocals_chroma is not None:
-                try:
-                    coarse_score = dtw_chroma_distance(
-                        q_chroma_small,
-                        downsample_chroma(feat.vocals_chroma, factor=4),
-                    )
-                except Exception:
-                    coarse_score = np.inf
-
-            coarse_rows.append(
-                {
-                    "candidate_title_key": ref_key,
-                    "candidate_title_display": feat.title_display,
-                    "coarse_score": coarse_score,
-                }
-            )
-
-        coarse_df = pd.DataFrame(coarse_rows)
-        coarse_df = coarse_df.sort_values(
-            ["coarse_score", "candidate_title_display"],
-            ascending=[True, True],
+        # Use the shared ranking function from hybrid_retrieval -- DRY.
+        weights = mode_weights("vocal_only")
+        cand_df = rank_query(
+            query_path=Path(audio_path),
+            ref_features=reference_features,
+            weights=weights,
+            shortlist_size=SHORTLIST_SIZE,
+            top_k=max(top_k, 4),   # fetch one extra for gap calculation
         )
-        shortlist_keys = coarse_df.head(SHORTLIST_SIZE)["candidate_title_key"].tolist()
 
-        # Stage 2: fine ranking on shortlist
-        fine_rows = []
-        for ref_key in shortlist_keys:
-            feat = reference_features[ref_key]
-
-            row = {
-                "candidate_title_display": feat.title_display,
-                "candidate_title_key": ref_key,
-                "vocal_pitch_dist": np.nan,
-                "vocal_chroma_dist": np.nan,
-            }
-
-            if feat.vocals_pitch is not None:
-                try:
-                    row["vocal_pitch_dist"] = subseq_dtw_distance(q_pitch, feat.vocals_pitch)
-                except Exception:
-                    pass
-
-            if feat.vocals_chroma is not None:
-                try:
-                    row["vocal_chroma_dist"] = dtw_chroma_distance(q_chroma, feat.vocals_chroma)
-                except Exception:
-                    pass
-
-            fine_rows.append(row)
-
-        cand_df = pd.DataFrame(fine_rows)
-
-        if cand_df.empty:
-            return {
-                "status": "none",
-                "top_conf": 0.0,
-                "reason": "features",
-            }
-
-        score_cols = ["vocal_pitch_dist", "vocal_chroma_dist"]
-        for col in score_cols:
-            values = cand_df[col].to_numpy(dtype=np.float32)
-            valid_mask = np.isfinite(values)
-            norm = np.ones_like(values, dtype=np.float32)
-            if valid_mask.any():
-                norm_valid = minmax_normalize(values[valid_mask])
-                norm[valid_mask] = norm_valid
-            cand_df[col + "_norm"] = norm
-
-        fused_scores = []
-        for _, row in cand_df.iterrows():
-            available = {}
-
-            if pd.notna(row["vocal_pitch_dist"]):
-                available["vocal_pitch_dist"] = VOCAL_ONLY_WEIGHTS["vocal_pitch"]
-            if pd.notna(row["vocal_chroma_dist"]):
-                available["vocal_chroma_dist"] = VOCAL_ONLY_WEIGHTS["vocal_chroma"]
-
-            if not available:
-                fused_scores.append(np.inf)
-                continue
-
-            weight_sum = sum(available.values())
-            score = 0.0
-            for col_name, weight in available.items():
-                score += (weight / weight_sum) * float(row[col_name + "_norm"])
-            fused_scores.append(score)
-
-        cand_df["fused_score"] = fused_scores
-        cand_df = cand_df.sort_values(
-            ["fused_score", "candidate_title_display"],
-            ascending=[True, True],
-        ).reset_index(drop=True)
+        if cand_df.empty or not np.isfinite(cand_df.iloc[0]["fused_score"]):
+            return {"status": "none", "top_conf": 0.0, "reason": "features"}
 
         top_score = float(cand_df.iloc[0]["fused_score"])
         second_score = float(cand_df.iloc[1]["fused_score"]) if len(cand_df) > 1 else None
@@ -435,18 +345,10 @@ def retrieve_audio(audio_path: str, top_k: int = TOP_K_DISPLAY) -> dict:
         top_strength = score_to_strength(top_score, second_score)
 
         results = []
-        ordered = cand_df.head(top_k).reset_index(drop=True)
-        for idx, row in ordered.iterrows():
+        for idx, row in cand_df.head(top_k).iterrows():
             score = float(row["fused_score"])
             strength = score_to_strength(score, second_score if idx == 0 else None)
             results.append((str(row["candidate_title_display"]), strength, score))
-
-        if not np.isfinite(top_score):
-            return {
-                "status": "none",
-                "top_conf": 0.0,
-                "reason": "low_confidence",
-            }
 
         gap = (second_score - top_score) if second_score is not None else 1.0
 
@@ -511,7 +413,7 @@ def render_spectrogram(result: dict):
 
 
 def render_result_found(result: dict):
-    name = result["top_song"]
+    name = html.escape(result["top_song"])   # prevent XSS from song names
     pct = f"{result['top_conf'] * 100:.0f}%"
 
     st.markdown(f"""
@@ -574,7 +476,7 @@ def render_result_none(result: dict):
     if reason == "silent":
         subtitle = "No audio was detected. Make sure your microphone is working and try again."
     elif reason == "short":
-        subtitle = "The recording was too short. Please hum for at least 3–5 seconds."
+        subtitle = "The recording was too short. Please hum for at least 3-5 seconds."
     elif reason == "features":
         subtitle = "Could not extract melody features. Try humming louder and more clearly."
     else:
@@ -591,7 +493,7 @@ def render_result_none(result: dict):
     st.markdown("""
     <div class="tip-box">
       <div class="tip-title">💡 Tips to improve recognition</div>
-      <div class="tip-item">Hum the chorus — it is the most recognisable part</div>
+      <div class="tip-item">Hum the chorus -- it is the most recognisable part</div>
       <div class="tip-item">Hum continuously for at least 5 seconds</div>
       <div class="tip-item">Reduce background noise around you</div>
       <div class="tip-item">Hold the melody steadily instead of changing speed too much</div>
@@ -600,21 +502,21 @@ def render_result_none(result: dict):
     """, unsafe_allow_html=True)
 
 
-# ─── Load reference metadata only (fast) ──────────────────────────────────────
+# --- Load reference metadata only (fast) --------------------------------------
 references, song_titles, load_status = load_reference_library()
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 # PAGE LAYOUT
-# ═══════════════════════════════════════════════════════════════════════════════
+# -------------------------------------------------------------------------------
 
 st.markdown("""
 <div class="hero">
   <span class="hero-icon">🎵</span>
   <h1 class="hero-title">Hum2Tune</h1>
   <p class="hero-subtitle">
-    Hum a melody — or play a song — and the retrieval engine will find the closest matches.
+    Hum a melody -- or play a song -- and the retrieval engine will find the closest matches.
   </p>
-  <span class="hero-badge">FYP Demo · Vocal-only Retrieval</span>
+  <span class="hero-badge">FYP Demo * Vocal-only Retrieval</span>
 </div>
 """, unsafe_allow_html=True)
 
@@ -688,7 +590,7 @@ with tab2:
     <div class="card">
       <div class="section-label">📂 upload audio</div>
       <p style="color:var(--muted);font-size:0.9rem;margin-bottom:1rem;">
-        Upload a <strong style="color:var(--text)">.wav, .mp3, or .m4a</strong> file —
+        Upload a <strong style="color:var(--text)">.wav, .mp3, or .m4a</strong> file --
         humming or song audio. The app will rank the closest song matches.
       </p>
     """, unsafe_allow_html=True)
@@ -710,7 +612,7 @@ with tab2:
 
 if run_prediction and audio_to_process:
     st.markdown("<br>", unsafe_allow_html=True)
-    with st.spinner("Analysing melody patterns…"):
+    with st.spinner("Analysing melody patterns..."):
         time.sleep(0.15)
         st.session_state.result = retrieve_audio(audio_to_process)
 

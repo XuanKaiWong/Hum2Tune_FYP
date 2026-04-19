@@ -1,34 +1,31 @@
 audio:
   sample_rate: 22050
+  duration: 10.0        # window duration in seconds
+  min_duration: 2.0     # minimum audio length to keep
 
-  # keep both for compatibility with old and cleaned code
-  duration: 10.0
-  max_duration: 10.0
-  min_duration: 2.0
-
-  n_mels: 128
-  n_mfcc: 13
-  hop_length: 512
+  # MFCC extraction
+  n_mfcc: 13            # base MFCC coefficients; total channels = n_mfcc * 3 (+ delta + delta-delta)
   n_fft: 2048
   win_length: 2048
+  hop_length: 512
 
-  min_freq: 80.0
-  max_freq: 8000.0
-  fmin: 65.0
-  fmax: 2093.0
+  # Vocal frequency range — constrains Mel filterbank to human singing range
+  fmin: 65.0            # C2 (~65 Hz) — bottom of practical singing range
+  fmax: 2093.0          # C7 (~2093 Hz) — top of practical singing range
 
+  # Silence removal
   trim_silence: true
   trim_top_db: 20
+
+  # Windowing
   window_overlap_ratio: 0.0
 
-  # this is the key the cleaned extractor uses
+  # Per-channel z-score normalization
   normalize_features: true
 
-  # optional legacy key, harmless to keep
-  normalize: true
-
+  # Data augmentation (applied to training split only)
   augmentation:
     enabled: true
     noise_level: 0.005
-    time_stretch_range: [0.85, 1.15]
-    pitch_shift_steps: [-3, -2, -1, 1, 2, 3]
+    time_stretch_rates: [0.85, 0.90, 1.10, 1.15]   # tempo invariance
+    pitch_shift_steps: [-3, -2, -1, 1, 2, 3]        # key invariance

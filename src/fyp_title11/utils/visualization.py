@@ -385,4 +385,4 @@ class AudioVisualizer:
         self.create_analysis_dashboard(audio, features, pitch_contour,
                                       save_path=output_path / "analysis_dashboard.png")
         
-        print(f"✅ Visualizations saved to: {output_path}")
+        print(f"[OK] Visualizations saved to: {output_path}")
