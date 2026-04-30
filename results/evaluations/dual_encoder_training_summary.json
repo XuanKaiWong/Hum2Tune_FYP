@@ -1,0 +1,19 @@
+{
+  "model": "dual_encoder",
+  "epochs_trained": 16,
+  "best_val_mrr": 0.75,
+  "final": {
+    "epoch": 16,
+    "train_loss": 2.0288980190570536,
+    "val_top1": 0.125,
+    "val_top3": 1.0,
+    "val_top5": 1.0,
+    "val_mrr": 0.46875,
+    "lr": 0.00027144804065905466
+  },
+  "num_train_windows": 52,
+  "num_val_windows": 16,
+  "num_reference_classes": 3,
+  "manifest_dir": "C:\\Users\\User\\Downloads\\Hum2Tune_FYP\\data\\manifests",
+  "reference_column": "reference_path"
+}

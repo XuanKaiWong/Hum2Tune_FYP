@@ -1,5 +1,3 @@
-"""Tests for dtw_matcher -- the consolidated DTW utility."""
-
 import numpy as np
 import pytest
 

@@ -1,32 +1,7 @@
-"""Audio Transformer model for Hum2Tune.
-
-Implements a Transformer-encoder-based melody classifier to compare against
-the CNN-LSTM baseline, directly addressing RQ3:
-    "How does the choice of model architecture influence performance
-     in melody-based music recognition?"
-
-Architecture overview:
-    1. Linear input projection: maps each frame's feature vector to d_model dims.
-    2. Sinusoidal positional encoding: injects temporal order information.
-       Unlike learned embeddings, sinusoidal encoding generalises to sequences
-       longer than those seen during training.
-    3. Transformer encoder (N x TransformerEncoderLayer): models long-range
-       dependencies between melody frames via multi-head self-attention.
-       This allows the model to focus on salient hooks regardless of their
-       position in the sequence -- a key advantage over LSTM's sequential bias.
-    4. Global average pooling: aggregates the variable-length sequence into a
-       fixed-size embedding without introducing learnable parameters.
-    5. Classification head: two-layer MLP maps the embedding to class logits.
-
-References:
-    Vaswani et al. (2017) "Attention Is All You Need". NeurIPS.
-    Devlin et al. (2019) "BERT: Pre-training of Deep Bidirectional Transformers".
-"""
-
 from __future__ import annotations
 
 import math
-from typing import Dict, Optional, Tuple
+from typing import Dict, Literal, overload
 
 import torch
 import torch.nn as nn
@@ -64,6 +39,7 @@ class SinusoidalPositionalEncoding(nn.Module):
         pe[:, 1::2] = torch.cos(position * div_term)   # odd  dims: cosine
         pe = pe.unsqueeze(0)  # (1, max_len, d_model) -- broadcast over batch
 
+        self.pe: torch.Tensor
         self.register_buffer("pe", pe)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -218,11 +194,11 @@ class AudioTransformer(nn.Module):
 
     def predict(self, x: torch.Tensor) -> torch.Tensor:
         logits = self.forward(x, return_features=False)
-        return torch.argmax(logits, dim=-1)
+        return torch.argmax(logits, dim=-1)  # type: ignore[arg-type]
 
     def predict_proba(self, x: torch.Tensor) -> torch.Tensor:
         logits = self.forward(x, return_features=False)
-        return F.softmax(logits, dim=-1)
+        return F.softmax(logits, dim=-1)  # type: ignore[arg-type]
 
 
 # -----------------------------------------------------------------------------

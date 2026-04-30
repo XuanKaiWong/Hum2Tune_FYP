@@ -1,23 +1,8 @@
-"""Hum2Tune - unified management console.
-
-Usage:
-    python main.py setup
-    python main.py dataset --create
-    python main.py train --model cnn_lstm
-    python main.py train --model audio_transformer
-    python main.py train --model cnn_lstm --curriculum
-    python main.py evaluate --model cnn_lstm
-    python main.py evaluate --model audio_transformer
-    python main.py predict --audio path/to/hum.wav --model cnn_lstm
-    python main.py retrieve --mode vocal_only
-    python main.py web
-    python main.py test
-"""
-
 import argparse
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any, cast
 
 # Belt-and-suspenders: strip UTF-8 BOM from this file if Windows zip extraction
 # added one. The BOM bytes (0xEF 0xBB 0xBF) are non-ASCII and cause
@@ -29,10 +14,12 @@ if _raw.startswith(b"\xef\xbb\xbf"):
 
 # Ensure help text and print() output does not crash on Windows terminals
 # that default to cp1252 or similar narrow encodings.
-if hasattr(sys.stdout, "reconfigure"):
+_stdout = cast(Any, sys.stdout)
+_stderr = cast(Any, sys.stderr)
+if hasattr(_stdout, "reconfigure"):
     try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+        _stdout.reconfigure(encoding="utf-8", errors="replace")
+        _stderr.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
         pass
 
@@ -68,9 +55,17 @@ def main() -> None:
     # dataset
     parser_dataset = subparsers.add_parser("dataset", help="Dataset operations")
     parser_dataset.add_argument(
-        "--create",
-        action="store_true",
+        "--create", action="store_true",
         help="Create processed dataset from raw humming audio",
+    )
+    parser_dataset.add_argument(
+        "--mode", type=str, default="retrieval_full",
+        choices=["retrieval_full", "classifier_subset"],
+        help="retrieval_full: all songs. classifier_subset: only songs with enough recordings.",
+    )
+    parser_dataset.add_argument(
+        "--min-files", type=int, default=5,
+        help="Min recordings per song for classifier_subset mode.",
     )
 
     # train
@@ -90,6 +85,30 @@ def main() -> None:
             "Use two-stage curriculum learning (vocal-only -> polyphonic). "
             "Requires data/processed/vocal_only/ to exist."
         ),
+    )
+
+    # train-dual-encoder
+    parser_dual = subparsers.add_parser(
+        "train-retrieval",
+        help="Train the DualEncoder for learned coarse retrieval (contrastive learning)",
+    )
+    parser_dual.add_argument("--epochs",        type=int,   default=60)
+    parser_dual.add_argument("--batch-size",    type=int,   default=16)
+    parser_dual.add_argument("--lr",            type=float, default=3e-4)
+    parser_dual.add_argument("--embedding-dim", type=int,   default=128)
+    parser_dual.add_argument("--temperature",   type=float, default=0.1)
+    parser_dual.add_argument("--patience",      type=int,   default=15)
+    parser_dual.add_argument(
+        "--manifest-dir",
+        type=str,
+        default=str(project_root / "data" / "manifests"),
+        help="Directory containing songs.csv, queries.csv and optional splits.csv",
+    )
+    parser_dual.add_argument(
+        "--reference-column",
+        type=str,
+        default="reference_path",
+        help="songs.csv column used as the reference audio path",
     )
 
     # evaluate
@@ -200,9 +219,22 @@ def main() -> None:
     elif args.command == "dataset":
         if args.create:
             from scripts import prepare_dataset
-            prepare_dataset.prepare_data()
+            prepare_dataset.prepare_data(mode=args.mode, min_files=args.min_files)
         else:
             parser_dataset.print_help()
+
+    elif args.command == "train-retrieval":
+        from scripts import train_dual_encoder
+        train_dual_encoder.train_dual_encoder(
+            epochs=args.epochs,
+            batch_size=args.batch_size,
+            lr=args.lr,
+            embedding_dim=args.embedding_dim,
+            temperature=args.temperature,
+            patience=args.patience,
+            manifest_dir=args.manifest_dir,
+            reference_column=args.reference_column,
+        )
 
     elif args.command == "train":
         from scripts import train_model

@@ -36,4 +36,4 @@ def test_chunked_dataset(tmp_path: Path):
     assert int(fy) == 1
 
     ds2 = resolve_split_dataset(tmp_path, "train_data")
-    assert len(ds2) == 3
+    assert len(ds2) == 3  # type: ignore[arg-type]

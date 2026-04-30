@@ -249,14 +249,32 @@ def save_recording_temp(audio_segment) -> str:
     return tmp_path
 
 
-def score_to_strength(top_score: float, second_score: float | None) -> float:
-    base = float(np.clip(1.0 - top_score, 0.0, 1.0))
+def score_to_confidence_band(top_score: float, second_score: float | None) -> str:
+    """Convert DTW fused score and score gap into a confidence band.
+
+    Returns "High", "Medium", or "Low" based on:
+    - How good the absolute top score is (lower = better match)
+    - How large the gap is between rank-1 and rank-2 (larger gap = more confident)
+
+    This replaces misleading exact percentages. DTW distances are not
+    calibrated probabilities -- a score gap is more honest.
+    """
     if second_score is None:
-        return base
-    gap = max(0.0, second_score - top_score)
-    gap_bonus = float(np.clip(gap / 0.25, 0.0, 1.0))
-    strength = 0.75 * base + 0.25 * gap_bonus
-    return float(np.clip(strength, 0.0, 1.0))
+        gap = 1.0
+    else:
+        gap = max(0.0, second_score - top_score)
+
+    # High: low score (good match) AND clear gap over rank-2
+    if top_score <= 0.20 and gap >= 0.08:
+        return "High"
+    # Low: either a poor score OR almost no gap (ambiguous)
+    if top_score > 0.40 or gap < 0.03:
+        return "Low"
+    return "Medium"
+
+
+def confidence_band_colour(band: str) -> str:
+    return {"High": "var(--success)", "Medium": "var(--warning)", "Low": "var(--muted)"}.get(band, "var(--muted)")
 
 
 @st.cache_resource(show_spinner=False)
@@ -342,33 +360,31 @@ def retrieve_audio(audio_path: str, top_k: int = TOP_K_DISPLAY) -> dict:
         top_score = float(cand_df.iloc[0]["fused_score"])
         second_score = float(cand_df.iloc[1]["fused_score"]) if len(cand_df) > 1 else None
         top_song = str(cand_df.iloc[0]["candidate_title_display"])
-        top_strength = score_to_strength(top_score, second_score)
+        confidence = score_to_confidence_band(top_score, second_score)
 
-        results = []
-        for idx, row in cand_df.head(top_k).iterrows():
+        # Always return top-3 as candidates -- never claim a single "exact" match
+        # with a misleading percentage. The user sees ranked candidates + confidence band.
+        top3 = []
+        top3_df = cand_df.head(3).reset_index(drop=True)
+        for pos, row in enumerate(top3_df.to_dict("records")):
             score = float(row["fused_score"])
-            strength = score_to_strength(score, second_score if idx == 0 else None)
-            results.append((str(row["candidate_title_display"]), strength, score))
+            next_score = (
+                float(top3_df.iloc[pos + 1]["fused_score"])
+                if pos + 1 < len(top3_df)
+                else None
+            )
+            band = score_to_confidence_band(score, next_score)
+            top3.append((str(row["candidate_title_display"]), band, score))
 
         gap = (second_score - top_score) if second_score is not None else 1.0
 
-        if top_score <= EXACT_SCORE_THRESHOLD and gap >= EXACT_GAP_THRESHOLD:
-            return {
-                "status": "exact",
-                "top_song": top_song,
-                "top_conf": top_strength,
-                "similar": [(name, strength) for name, strength, _ in results[1:4]],
-                "audio": audio,
-                "sr": sr,
-            }
-
         return {
-            "status": "similar",
-            "top_song": top_song,
-            "top_conf": top_strength,
-            "similar": [(name, strength) for name, strength, _ in results[:3]],
-            "audio": audio,
-            "sr": sr,
+            "status": "found" if confidence in ("High", "Medium") else "low_confidence",
+            "top_song":   top_song,
+            "confidence": confidence,
+            "top3":       top3,
+            "audio":      audio,
+            "sr":         sr,
         }
 
     except Exception as exc:
@@ -413,35 +429,66 @@ def render_spectrogram(result: dict):
 
 
 def render_result_found(result: dict):
-    name = html.escape(result["top_song"])   # prevent XSS from song names
-    pct = f"{result['top_conf'] * 100:.0f}%"
+    """Render top-3 candidates with confidence band -- no fake percentages."""
+    name = html.escape(result["top_song"])
+    band = result["confidence"]
+    colour = confidence_band_colour(band)
 
     st.markdown(f"""
     <div class="result-found">
-      <div class="song-match-icon">🎯</div>
+      <div class="song-match-icon">&#127919;</div>
       <div class="match-label">BEST MATCH</div>
       <div class="song-title-large">{name}</div>
-      <span class="confidence-pill">Match strength {pct}</span>
+      <span class="confidence-pill" style="border-color:{colour};color:{colour};">
+        Confidence: {band}
+      </span>
+      <div style="font-size:0.78rem;color:var(--muted);margin-top:0.5rem;">
+        Based on pitch contour and chroma similarity
+      </div>
     </div>
     """, unsafe_allow_html=True)
 
-    if result.get("similar"):
+    top3 = result.get("top3", [])
+    if len(top3) > 1:
         st.markdown("<br>", unsafe_allow_html=True)
         with st.expander("See other close matches"):
-            for i, (s_name, s_conf) in enumerate(result["similar"], 2):
-                bar_w = int(s_conf * 100)
+            for i, (s_name, s_band, _) in enumerate(top3[1:], 2):
+                s_colour = confidence_band_colour(s_band)
                 st.markdown(f"""
                 <div class="similar-song-row">
                   <div class="song-rank">#{i}</div>
-                  <div class="similar-song-name">{s_name}</div>
-                  <div class="confidence-bar-wrap">
-                    <div class="confidence-bar-fill" style="width:{bar_w}%"></div>
-                  </div>
-                  <div class="conf-pct">{s_conf*100:.0f}%</div>
+                  <div class="similar-song-name">{html.escape(s_name)}</div>
+                  <div class="conf-pct" style="color:{s_colour};">{s_band}</div>
                 </div>
                 """, unsafe_allow_html=True)
 
     render_spectrogram(result)
+
+
+def render_result_low_confidence(result: dict):
+    """Render top-3 when no candidate is clearly dominant."""
+    st.markdown("""
+    <div class="result-similar">
+      <div class="similar-header">&#129300; &nbsp; Possible matches</div>
+      <p style="color:#b0b0c0; font-size:0.88rem; margin-bottom:1.2rem;">
+        No candidate is clearly dominant. These are the closest matches
+        found by pitch contour and chroma alignment.
+      </p>
+    """, unsafe_allow_html=True)
+
+    for i, (s_name, s_band, _) in enumerate(result.get("top3", []), 1):
+        s_colour = confidence_band_colour(s_band)
+        st.markdown(f"""
+        <div class="similar-song-row">
+          <div class="song-rank">#{i}</div>
+          <div class="similar-song-name">{html.escape(s_name)}</div>
+          <div class="conf-pct" style="color:{s_colour};">{s_band}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    st.markdown("</div>", unsafe_allow_html=True)
+    render_spectrogram(result)
+
 
 
 def render_result_similar(result: dict):
@@ -572,7 +619,7 @@ with tab1:
     if len(audio) > 0:
         st.markdown("<div class='card'>", unsafe_allow_html=True)
         st.markdown('<div class="section-label">▶ review your recording</div>', unsafe_allow_html=True)
-        st.audio(audio.export().read())
+        st.audio(audio.export().read())  # type: ignore[attr-defined]
 
         col1, col2 = st.columns([3, 2])
         with col1:
@@ -625,10 +672,10 @@ if st.session_state.result is not None:
     result = st.session_state.result
     st.markdown("<br>", unsafe_allow_html=True)
 
-    if result["status"] == "exact":
+    if result["status"] == "found":
         render_result_found(result)
-    elif result["status"] == "similar":
-        render_result_similar(result)
+    elif result["status"] == "low_confidence":
+        render_result_low_confidence(result)
     elif result["status"] == "none":
         render_result_none(result)
     elif result["status"] == "error":

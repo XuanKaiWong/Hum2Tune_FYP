@@ -1,26 +1,3 @@
-"""End-to-end smoke test for Hum2Tune.
-
-Verifies that every major pipeline component can be imported and instantiated
-with valid inputs without crashing. Does NOT require real audio data or trained
-model weights -- it uses synthetic tensors and mocked configs so the test runs
-in any CI environment.
-
-Run with:
-    pytest tests/test_smoke.py -v
-
-What this covers:
-  - Feature extraction pipeline (39-channel MFCC+delta)
-  - CNN-LSTM forward pass (train mode and eval mode)
-  - Audio Transformer forward pass
-  - Fusion model forward pass
-  - DTW distance functions
-  - Metrics (all functions, subset-class scenario)
-  - Dataset loader with synthetic .npy chunks
-  - train_model.load_config() and build_model()
-  - evaluate.load_training_config() and build_model()
-  - main.py MODEL_CHOICES and argument parser construction
-"""
-
 import json
 import sys
 import tempfile

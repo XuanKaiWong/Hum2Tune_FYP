@@ -1,5 +1,3 @@
-"""Project setup helpers for Hum2Tune."""
-
 from __future__ import annotations
 
 import platform

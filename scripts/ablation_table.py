@@ -1,15 +1,3 @@
-"""Generate the ablation study table for the dissertation.
-
-Shows the contribution of each component by comparing variants that
-differ in exactly one dimension. Handles both classifier eval JSONs
-(top_1_accuracy etc.) and retrieval summary JSONs (top1 etc.)
-automatically via the same key-alias lookup used in results_table.py.
-
-Usage:
-    python scripts/ablation_table.py
-    python scripts/ablation_table.py --latex
-"""
-
 from __future__ import annotations
 
 import argparse

@@ -49,8 +49,32 @@ class ReferenceFeatures:
     no_vocals_chroma: Optional[np.ndarray]
 
 
-# Leave empty if your names are already consistent.
-ALIASES: dict[str, str] = {}
+
+ALIASES: dict[str, str] = {
+    # Punctuation / apostrophe variants
+    "7rings":                         "7 rings",
+    "7 rings":                        "7 rings",
+    "we dont talk anymore":           "we don t talk anymore",
+    "we don t talk anymore":          "we don t talk anymore",
+    "dont go":                        "don t go",
+    "i m not the only one":           "i m not the only one",
+    "i m yours":                      "i m yours",
+    "there s nothing holdin me back": "there s nothing holdin me back",
+    # Capitalisation / spacing variants that survive canonical_title()
+    "a thousand years":               "a thousand years",
+    "a thousand year":                "a thousand years",
+    "thousand years":                 "a thousand years",
+    "back to december":               "back to december",
+    "back to december 2":             "back to december",
+    "back to december 3":             "back to december",
+    "all of me":                      "all of me",
+    "how far i ll go":                "how far i ll go",
+    "how far ill go":                 "how far i ll go",
+    "i can do it with a broken heart":"i can do it with a broken heart",
+    # Numeric song titles
+    "13":                             "13",
+    "22":                             "22",
+}
 
 
 def canonical_title(name: str) -> str:
@@ -126,8 +150,8 @@ def extract_pitch_sequence(
     f0, voiced_flag, _ = librosa.pyin(
         y,
         sr=sr,
-        fmin=librosa.note_to_hz(fmin_note),
-        fmax=librosa.note_to_hz(fmax_note),
+        fmin=float(librosa.note_to_hz(fmin_note)),
+        fmax=float(librosa.note_to_hz(fmax_note)),
         frame_length=frame_length,
         hop_length=hop_length,
     )
@@ -290,17 +314,6 @@ def compute_rank_metrics(ranked_df: pd.DataFrame, true_title_key: str):
 
 
 def summarize(df: pd.DataFrame) -> dict:
-    """Compute retrieval summary metrics from ranked results.
-
-    Metrics reported:
-      Top-1, Top-3, Top-5: fraction of queries where the correct song
-        appears within the top K results.
-      MRR: Mean Reciprocal Rank -- average of 1/rank for each query.
-      MAP@10: Mean Average Precision at rank 10 -- standard IR metric
-        that rewards correct answers near the top of the ranking.
-      NDCG@10: Normalised Discounted Cumulative Gain at rank 10 -- applies
-        a logarithmic discount to penalise correct answers at lower ranks.
-    """
     if len(df) == 0:
         return {"count": 0, "top1": None, "top3": None, "top5": None,
                 "mrr": None, "map_at_10": None, "ndcg_at_10": None}
@@ -720,27 +733,7 @@ def rank_query(
     shortlist_size: int = 10,
     top_k: int = 3,
 ) -> "pd.DataFrame":
-    """Rank all reference songs against a single query audio file.
 
-    This is the shared per-query scoring function used by both the batch
-    evaluation pipeline (run()) and the Streamlit app (app.py), eliminating
-    the duplicated ranking logic that previously existed in both files.
-
-    Args:
-        query_path:    Path to the query audio file (humming/recording).
-        ref_features:  Dict mapping title_key -> ReferenceFeatures, pre-loaded.
-        weights:       Score weight dict, e.g. {"vocal_pitch": 0.6, ...}.
-        shortlist_size: Number of candidates kept after coarse chroma filtering.
-        top_k:         Number of ranked results to return.
-
-    Returns:
-        DataFrame with columns [candidate_title_display, candidate_title_key,
-        vocal_pitch_dist, vocal_chroma_dist, fused_score], sorted ascending
-        by fused_score (lower = better match). Only top_k rows returned.
-
-    Raises:
-        ValueError: If pitch/chroma features cannot be extracted from query.
-    """
     import pandas as pd
 
     q_pitch, q_chroma = safe_extract_query_features(query_path)

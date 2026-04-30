@@ -1,91 +1,211 @@
-# Python
+# =============================================================================
+# Hum2Tune .gitignore
+# =============================================================================
+# Keep only source code, configuration, documentation, lightweight manifests,
+# and small final summary files.
+#
+# Do not commit:
+# - downloaded datasets
+# - original songs
+# - separated vocals/no-vocals
+# - generated feature caches
+# - model weights
+# - logs
+# - large outputs
+# - temporary backup folders
+# =============================================================================
+
+
+# =============================================================================
+# Python cache / bytecode
+# =============================================================================
 __pycache__/
 **/__pycache__/
 *.py[cod]
 *.pyo
 *.pyd
 *.so
+
+
+# =============================================================================
+# Python packaging
+# =============================================================================
 *.egg
 *.egg-info/
 dist/
 build/
 .eggs/
 
-# Environment
+
+# =============================================================================
+# Virtual environments
+# =============================================================================
 .env
-!.env.example
 .venv/
 venv/
 env/
 
-# Jupyter
-.ipynb_checkpoints/
+# Keep example environment file if available
+!.env.example
 
-# IDE / editor
+
+# =============================================================================
+# IDE / editor / OS files
+# =============================================================================
 .idea/
 .vscode/
 *.swp
 *.swo
-
-# OS
 .DS_Store
 Thumbs.db
+desktop.ini
 
-# Test / coverage
+
+# =============================================================================
+# Jupyter / testing / coverage
+# =============================================================================
+.ipynb_checkpoints/
+*.ipynb
 .pytest_cache/
 .coverage
 htmlcov/
 coverage.xml
 
-# Model weights
-models/**/*.pth
-models/**/*.pt
-!models/.gitkeep
 
-# Logs
-logs/
+# =============================================================================
+# DATA
+# =============================================================================
+# Do not commit downloaded humming datasets, original songs, separated audio,
+# processed arrays, or large generated dataset folders.
+# =============================================================================
 
-# Outputs / generated retrieval files
-outputs/reference_feature_cache/
-outputs/*.csv
-outputs/hybrid_retrieval_*_partial.*
-outputs/*_partial.json
-
-# Generated visualizations
-results/visualizations/*.png
-results/visualizations/*.pdf
-
-# Data
-# Ignore everything in data by default
-data/*
-
-# Keep lightweight docs / metadata / manifests
-!data/README_DATA.md
-!data/manifests/
-!data/manifests/queries.csv
-!data/manifests/songs.csv
-!data/manifests/splits.csv
-
-!data/raw/
-data/raw/*
-!data/raw/metadata/
-!data/raw/metadata/songs_metadata.csv
-
-!data/hummed/
-data/hummed/*
-!data/hummed/metadata/
-!data/hummed/metadata/hummed_metadata.csv
-
-# Explicitly ignore heavy audio / generated folders
-data/demucs_output/
-data/hummed/recordings/
+# Raw humming datasets
 data/Humming Audio/
 data/humming_queries/
+data/friend_humming_queries/
+
+# Original/reference songs
 data/Original Songs/
-data/processed/
-data/raw/original_songs/
 data/song_references/
 
-# Ignore spreadsheet exports unless you explicitly decide to keep them
+# Source-separated audio
+data/demucs_output/
+demucs_output/
+
+# Legacy or old raw data layouts
+data/hummed/
+data/raw/
+data/raw/metadata/
+data/raw/metadata/*.csv
+
+# Processed/generated dataset arrays
+data/processed/
+
+# Large spreadsheet/list files
+data/extracted_folder_names_sorted_by_artist*
 data/*.xlsx
 data/*.xls
+
+# Keep lightweight dataset instructions and manifest files
+!data/README_DATA.md
+!data/manifests/
+!data/manifests/*.csv
+
+
+# =============================================================================
+# MODELS
+# =============================================================================
+# Do not commit trained model weights, checkpoints, generated class maps,
+# or old model backup folders.
+# =============================================================================
+
+# Model weight files
+models/**/*.pth
+models/**/*.pt
+models/**/*.bin
+models/**/*.ckpt
+
+# Generated model metadata
+models/**/classes.json
+
+# Backup model folders from experiments
+models/audio_transformer_before_*/
+models/cnn_lstm_before_*/
+models/audio_transformer_before_clean_restore_*/
+models/audio_transformer_before_fix_*/
+models/audio_transformer_before_friend_retrain_*/
+models/cnn_lstm_before_clean_restore_*/
+models/cnn_lstm_before_fix_*/
+models/cnn_lstm_before_friend_retrain_*/
+
+# Generated or temporary model folders
+models/checkpoints/
+models/dtw/
+
+# Keep model folder placeholder if used
+!models/.gitkeep
+
+
+# =============================================================================
+# OUTPUTS
+# =============================================================================
+# Generated retrieval outputs and feature caches.
+# Keep only small final summary JSON files if useful for report verification.
+# =============================================================================
+
+# Feature caches
+outputs/reference_feature_cache/
+outputs/dual_encoder_feature_cache/
+
+# Large/generated output files
+outputs/*.csv
+outputs/*_partial.*
+outputs/*.pkl
+outputs/*.pickle
+outputs/*.npy
+outputs/*.npz
+
+# Keep small retrieval summary files
+!outputs/hybrid_retrieval_*_summary.json
+
+
+# =============================================================================
+# RESULTS
+# =============================================================================
+# Generated figures can be recreated.
+# Keep final evaluation JSON summaries because they support the report results.
+# =============================================================================
+
+# Generated visualisations
+results/visualizations/
+results/**/*.png
+results/**/*.pdf
+
+# Training history CSVs can be regenerated
+results/evaluations/*training_history.csv
+results/evaluations/dual_encoder_training_history.csv
+
+# Keep final evaluation summaries
+!results/evaluations/
+!results/evaluations/*.json
+
+
+# =============================================================================
+# LOGS
+# =============================================================================
+
+logs/
+*.log
+
+
+# =============================================================================
+# TEMPORARY / BACKUP FILES
+# =============================================================================
+
+*.tmp
+*.bak
+*.backup
+*.old
+*.zip
+*.rar
+*.7z

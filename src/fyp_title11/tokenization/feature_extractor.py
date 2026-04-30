@@ -1,18 +1,3 @@
-"""Feature extractor for Hum2Tune (39-channel version).
-
-Outputs a 39-channel feature tensor per audio segment:
-  - 13 MFCC coefficients
-  - 13 delta-MFCC  (first-order velocity: captures pitch direction)
-  - 13 delta-delta-MFCC (second-order acceleration: captures pitch rate-of-change)
-
-Delta features encode how the melody moves over time -- the core signal for
-query-by-humming (Choi et al., 2017; Muller, 2007).
-
-The Mel filterbank is constrained to [fmin, fmax] (65-2093 Hz by default)
-to focus on the vocal frequency range and exclude sub-bass / high-frequency
-noise that is irrelevant for humming recognition.
-"""
-
 from __future__ import annotations
 
 from pathlib import Path

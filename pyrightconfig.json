@@ -1,0 +1,31 @@
+{
+  "pythonVersion": "3.13",
+  "venvPath": ".",
+  "venv": ".venv",
+  "extraPaths": [
+    "src",
+    "scripts"
+  ],
+  "include": [
+    "src",
+    "scripts",
+    "tests",
+    "main.py"
+  ],
+  "exclude": [
+    "**/node_modules",
+    "**/__pycache__",
+    "**/.*",
+    ".venv",
+    "data",
+    "models",
+    "outputs",
+    "results",
+    "logs",
+    "compare_*",
+    "demucs_output"
+  ],
+  "reportMissingImports": "warning",
+  "reportMissingModuleSource": "none",
+  "typeCheckingMode": "basic"
+}

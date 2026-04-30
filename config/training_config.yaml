@@ -1,15 +1,22 @@
-# Hum2Tune — Training Configuration
+# Hum2Tune -- Training Configuration
 # This file is the single source of truth for all training hyperparameters.
 # Values here override the defaults coded in train_model.py::load_config().
 
 training:
   # ── Data ─────────────────────────────────────────────────────────────────
   # input_channels MUST match FeatureExtractor.input_channels = n_mfcc * 3
-  # n_mfcc defaults to 13, so 13 * 3 = 39 channels (MFCC + delta + delta-delta)
   input_channels: 39
+  # num_workers: set to 0 on Windows to avoid DataLoader spawn issues.
+  # On Linux/Mac with a GPU, set to 4-8 for faster data loading.
   num_workers: 0
-  batch_size: 8
+  batch_size: 16          # increase to 32 or 64 if GPU has >= 8 GB VRAM
   seed: 42
+
+  # ── GPU / Mixed Precision ─────────────────────────────────────────────────
+  # mixed_precision: enables torch.cuda.amp (float16 forward, float32 optim)
+  # Gives 1.5-2x speedup on RTX/Volta GPUs with Tensor Cores.
+  # Automatically disabled on CPU -- safe to leave true always.
+  mixed_precision: true
 
   # ── Optimiser ─────────────────────────────────────────────────────────────
   learning_rate: 0.0005
@@ -26,13 +33,11 @@ training:
   early_stopping_patience: 20
 
   # ── Loss ──────────────────────────────────────────────────────────────────
-  label_smoothing: 0.05   # Stage 1 value; overridden per stage by curriculum
+  label_smoothing: 0.05
   use_class_weights: true
   use_weighted_sampler: true
 
   # ── Curriculum learning ───────────────────────────────────────────────────
-  # Set to true to enable two-stage vocal-only → polyphonic curriculum (RQ4).
-  # Set to false for standard single-pass training.
   use_curriculum: true
 
   # ── CNN-LSTM hyperparameters ───────────────────────────────────────────────
@@ -45,7 +50,6 @@ training:
   norm_type: group
 
   # ── Audio Transformer hyperparameters ─────────────────────────────────────
-  # Used when training with --model transformer
   transformer:
     d_model: 128
     nhead: 4

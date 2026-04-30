@@ -1,0 +1,82 @@
+{
+  "top_1_accuracy": 0.1951219512195122,
+  "top_3_accuracy": 1.0,
+  "mrr": 0.5447154471544715,
+  "map_at_10": 0.5447154471544715,
+  "ndcg_at_10": 0.6614291480836378,
+  "accuracy": 0.1951219512195122,
+  "macro_precision": 0.29333333333333333,
+  "macro_recall": 0.26068376068376065,
+  "macro_f1": 0.23189964157706092,
+  "weighted_f1": 0.2123787044322056,
+  "per_class": {
+    "A Thousand Years": {
+      "precision": 0.08,
+      "recall": 0.3333,
+      "f1": 0.129,
+      "support": 6
+    },
+    "Back To December": {
+      "precision": 0.3,
+      "recall": 0.1154,
+      "f1": 0.1667,
+      "support": 26
+    },
+    "Sunflower": {
+      "precision": 0.5,
+      "recall": 0.3333,
+      "f1": 0.4,
+      "support": 9
+    }
+  },
+  "confusion_matrix": [
+    [
+      2,
+      4,
+      0
+    ],
+    [
+      20,
+      3,
+      3
+    ],
+    [
+      3,
+      3,
+      3
+    ]
+  ],
+  "most_confused_pairs": [
+    [
+      "Back To December",
+      "A Thousand Years",
+      20
+    ],
+    [
+      "A Thousand Years",
+      "Back To December",
+      4
+    ],
+    [
+      "Back To December",
+      "Sunflower",
+      3
+    ],
+    [
+      "Sunflower",
+      "A Thousand Years",
+      3
+    ],
+    [
+      "Sunflower",
+      "Back To December",
+      3
+    ]
+  ],
+  "model": "audio_transformer",
+  "curriculum": false,
+  "checkpoint": "C:\\Users\\User\\Downloads\\Hum2Tune_FYP\\models\\audio_transformer\\best_model.pth",
+  "split": "test",
+  "num_classes": 3,
+  "num_samples": 41
+}

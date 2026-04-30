@@ -1,13 +1,3 @@
-"""Feature extractor tests for Hum2Tune.
-
-Tests verify:
-- Output shape is always (input_channels, target_len) -- consistent with
-  the model's expected input format.
-- input_channels == n_mfcc * 3 (MFCC + delta + delta-delta).
-- process_file and process_audio produce lists of arrays.
-- Normalization produces zero-mean channels.
-"""
-
 import numpy as np
 import pytest
 

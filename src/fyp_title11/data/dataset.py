@@ -3,7 +3,7 @@ from __future__ import annotations
 import bisect
 import json
 from pathlib import Path
-from typing import Iterable, Optional, Sequence, Tuple, Union
+from typing import Iterable, Literal, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import torch
@@ -52,7 +52,7 @@ class ChunkedAudioDataset(Dataset):
     need to be fully loaded into RAM.
     """
 
-    def __init__(self, meta_path: PathLike, mmap_mode: Optional[str] = "r"):
+    def __init__(self, meta_path: PathLike, mmap_mode: Literal["r+", "r", "w+", "c"] | None = "r"):
         self.meta_path = Path(meta_path)
         if self.meta_path.suffix != ".json":
             raise ValueError(f"ChunkedAudioDataset expects a *_meta.json file, got: {self.meta_path}")

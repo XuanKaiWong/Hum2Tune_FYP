@@ -1,5 +1,3 @@
-"""Accuracy-focused training pipeline for Hum2Tune CNN-LSTM."""
-
 from __future__ import annotations
 
 import io
@@ -7,8 +5,9 @@ import json
 import logging
 import random
 import sys
+from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -16,7 +15,8 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import yaml
-from torch.utils.data import DataLoader, WeightedRandomSampler
+from torch.cuda.amp import GradScaler, autocast
+from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
 
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root / "src"))
@@ -53,15 +53,36 @@ MODEL_REGISTRY: dict[str, Any] = {
 }
 
 
+def get_device() -> torch.device:
+    """Return the best available device and log GPU info if available."""
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+        gpu_name = torch.cuda.get_device_name(0)
+        gpu_mem  = torch.cuda.get_device_properties(0).total_memory / 1024**3
+        logger.info("GPU detected: %s (%.1f GB VRAM)", gpu_name, gpu_mem)
+        logger.info("CUDA version: %s", torch.version.cuda)
+    else:
+        device = torch.device("cpu")
+        logger.info("No GPU detected -- training on CPU (will be slow)")
+    return device
+
+
 def set_seed(seed: int = SEED) -> None:
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
-
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
+        # deterministic=True disables cudnn.benchmark; use only when
+        # exact reproducibility matters more than speed.
+        torch.backends.cudnn.deterministic = False
+        # benchmark=True lets cuDNN auto-tune the fastest conv algorithm
+        # for the fixed input sizes used in this project. Gives 10-30%
+        # speedup after the first epoch warmup.
+        torch.backends.cudnn.benchmark = True
+    else:
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
 
 
 def load_config() -> dict:
@@ -81,6 +102,13 @@ def load_config() -> dict:
                 loaded_conf = loaded["training"]
 
     # Sensible defaults -- only applied when the key is absent from YAML.
+    # num_workers: auto = half the CPU count, capped at 8, 0 on Windows
+    # (Windows DataLoader with spawn can silently hang with num_workers > 0).
+    import os as _os, platform as _platform
+    _auto_workers = min(8, max(0, (_os.cpu_count() or 1) // 2))
+    if _platform.system() == "Windows":
+        _auto_workers = 0
+
     defaults = {
         "batch_size": 8,
         "learning_rate": 3e-4,
@@ -95,14 +123,19 @@ def load_config() -> dict:
         "dropout": 0.3,
         "bidirectional": True,
         "use_attention": True,
+        "attn_hidden_dim": 32,
         "norm_type": "group",
         "scheduler_patience": 5,
         "scheduler_factor": 0.5,
         "min_lr": 1e-6,
         "label_smoothing": 0.1,
-        "num_workers": 0,
+        "num_workers": _auto_workers,
         "use_weighted_sampler": True,
         "use_class_weights": True,
+        # mixed_precision: uses torch.cuda.amp for 1.5-2x speedup on GPU
+        # with Tensor Cores (RTX/Volta and newer). Automatically disabled
+        # when running on CPU.
+        "mixed_precision": True,
     }
     # YAML values always win over defaults.
     conf = {**defaults, **loaded_conf}
@@ -199,7 +232,7 @@ def save_training_curves(history: dict, save_dir: Path, model_name: str) -> None
     plt.close()
 
 
-def evaluate_epoch(model, loader, device, criterion):
+def evaluate_epoch(model, loader, device, criterion, use_amp: bool = False):
     model.eval()
 
     total = 0
@@ -209,19 +242,18 @@ def evaluate_epoch(model, loader, device, criterion):
 
     with torch.no_grad():
         for X, y in loader:
-            X = X.to(device)
-            y = y.to(device)
+            X = X.to(device, non_blocking=True)
+            y = y.to(device, non_blocking=True)
 
-            logits = extract_logits(model(X))
-            loss = criterion(logits, y)
+            with autocast(enabled=use_amp):
+                logits = extract_logits(model(X))
+                loss = criterion(logits, y)
 
             running_loss += loss.item() * y.size(0)
             total += y.size(0)
 
-            # Top-1 accuracy
             correct_top1 += (logits.argmax(dim=1) == y).sum().item()
 
-            # Top-5 accuracy (guarded for when num_classes < 5)
             k = min(5, logits.size(1))
             top5_preds = logits.topk(k, dim=1).indices
             correct_top5 += (top5_preds == y.unsqueeze(1)).any(dim=1).sum().item()
@@ -282,8 +314,15 @@ def train_pipeline(model_name: str = "cnn_lstm") -> None:
     seed = int(train_conf.get("seed", SEED))
     set_seed(seed)
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = get_device()
     logger.info("Training on device: %s", device)
+
+    # Mixed-precision training (AMP) -- speeds up GPU training by 1.5-2x
+    # using float16 for forward/backward and float32 for the optimizer step.
+    # Automatically no-op on CPU.
+    use_amp = bool(train_conf.get("mixed_precision", True)) and device.type == "cuda"
+    scaler = GradScaler(enabled=use_amp)
+    logger.info("Mixed-precision (AMP): %s", "enabled" if use_amp else "disabled")
 
     data_dir = project_root / "data" / "processed" / "datasets"
     class_map = load_class_map(data_dir / "classes.json")
@@ -304,7 +343,7 @@ def train_pipeline(model_name: str = "cnn_lstm") -> None:
     shuffle = True
     if bool(train_conf.get("use_weighted_sampler", True)):
         sampler = WeightedRandomSampler(
-            weights=torch.as_tensor(sample_weights, dtype=torch.double),
+            weights=np.asarray(sample_weights, dtype=np.float64).tolist(),
             num_samples=len(sample_weights),
             replacement=True,
         )
@@ -317,7 +356,8 @@ def train_pipeline(model_name: str = "cnn_lstm") -> None:
         shuffle=shuffle,
         sampler=sampler,
         num_workers=num_workers,
-        pin_memory=torch.cuda.is_available(),
+        pin_memory=(device.type == "cuda"),   # page-lock host memory for faster H->D transfer
+        persistent_workers=(num_workers > 0), # keep worker processes alive between epochs
         drop_last=False,
     )
     val_loader = DataLoader(
@@ -325,14 +365,17 @@ def train_pipeline(model_name: str = "cnn_lstm") -> None:
         batch_size=batch_size,
         shuffle=False,
         num_workers=num_workers,
-        pin_memory=torch.cuda.is_available(),
+        pin_memory=(device.type == "cuda"),
+        persistent_workers=(num_workers > 0),
         drop_last=False,
     )
+    logger.info("DataLoader num_workers: %d | pin_memory: %s | persistent_workers: %s",
+                num_workers, device.type == "cuda", num_workers > 0)
 
     model = build_model(model_name, num_classes=num_classes, train_conf=train_conf).to(device)
 
     logger.info("Model: %s", model_name)
-    logger.info("Train samples: %d | Val samples: %d", len(train_dataset), len(val_dataset))
+    logger.info("Train samples: %d | Val samples: %d", len(train_dataset), len(val_dataset))  # type: ignore[arg-type]
     logger.info("Number of classes: %d", num_classes)
     logger.info("Final training config: %s", json.dumps(train_conf, indent=2))
 
@@ -399,17 +442,24 @@ def train_pipeline(model_name: str = "cnn_lstm") -> None:
         correct_train = 0
 
         for X, y in train_loader:
-            X = X.to(device)
-            y = y.to(device)
+            # non_blocking=True overlaps H->D transfer with GPU compute
+            X = X.to(device, non_blocking=True)
+            y = y.to(device, non_blocking=True)
 
             optimizer.zero_grad(set_to_none=True)
 
-            logits = extract_logits(model(X))
-            loss = criterion(logits, y)
-            loss.backward()
+            # autocast: runs forward pass in float16 on GPU (no-op on CPU)
+            with autocast(enabled=use_amp):
+                logits = extract_logits(model(X))
+                loss = criterion(logits, y)
 
+            # scaler: scales the loss to prevent float16 underflow,
+            # then unscales gradients before the optimizer step.
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=grad_clip)
-            optimizer.step()
+            scaler.step(optimizer)
+            scaler.update()
 
             running_loss += loss.item() * y.size(0)
             total_train += y.size(0)
@@ -418,7 +468,7 @@ def train_pipeline(model_name: str = "cnn_lstm") -> None:
         train_loss = running_loss / max(total_train, 1)
         train_acc = correct_train / max(total_train, 1)
 
-        val_loss, val_acc, val_top5_acc = evaluate_epoch(model, val_loader, device, criterion)
+        val_loss, val_acc, val_top5_acc = evaluate_epoch(model, val_loader, device, criterion, use_amp)
         scheduler.step(val_acc)
 
         current_lr = optimizer.param_groups[0]["lr"]
@@ -523,8 +573,12 @@ def curriculum_train_pipeline(model_name: str = "cnn_lstm") -> None:
     seed = int(train_conf.get("seed", SEED))
     set_seed(seed)
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = get_device()
     logger.info("[Curriculum] Training on device: %s", device)
+
+    use_amp = bool(train_conf.get("mixed_precision", True)) and device.type == "cuda"
+    scaler = GradScaler(enabled=use_amp)
+    logger.info("[Curriculum] Mixed-precision (AMP): %s", "enabled" if use_amp else "disabled")
 
     data_dir = project_root / "data" / "processed" / "datasets"
     vocal_only_dir = project_root / "data" / "processed" / "vocal_only"
@@ -538,7 +592,8 @@ def curriculum_train_pipeline(model_name: str = "cnn_lstm") -> None:
         batch_size=int(train_conf.get("batch_size", 8)),
         shuffle=False,
         num_workers=int(train_conf.get("num_workers", 0)),
-        pin_memory=torch.cuda.is_available(),
+        pin_memory=(device.type == "cuda"),
+        persistent_workers=(int(train_conf.get("num_workers", 0)) > 0),
     )
 
     model = build_model(model_name, num_classes=num_classes, train_conf=train_conf).to(device)
@@ -591,17 +646,19 @@ def curriculum_train_pipeline(model_name: str = "cnn_lstm") -> None:
         _, _, class_weights_np, sample_weights = build_balancing(stage_train_dataset, num_classes)
 
         sampler = WeightedRandomSampler(
-            weights=torch.as_tensor(sample_weights, dtype=torch.double),
+            weights=np.asarray(sample_weights, dtype=np.float64).tolist(),
             num_samples=len(sample_weights),
             replacement=True,
         )
+        _nw = int(train_conf.get("num_workers", 0))
         stage_loader = DataLoader(
             stage_train_dataset,
             batch_size=int(train_conf.get("batch_size", 8)),
             sampler=sampler,
             shuffle=False,
-            num_workers=int(train_conf.get("num_workers", 0)),
-            pin_memory=torch.cuda.is_available(),
+            num_workers=_nw,
+            pin_memory=(device.type == "cuda"),
+            persistent_workers=(_nw > 0),
         )
 
         # Reinitialise optimiser for each stage (allows LR adjustment)
@@ -636,20 +693,23 @@ def curriculum_train_pipeline(model_name: str = "cnn_lstm") -> None:
             correct_train = 0
 
             for X, y in stage_loader:
-                X, y = X.to(device), y.to(device)
+                X, y = X.to(device, non_blocking=True), y.to(device, non_blocking=True)
                 optimizer.zero_grad(set_to_none=True)
-                logits = extract_logits(model(X))
-                loss = criterion(logits, y)
-                loss.backward()
+                with autocast(enabled=use_amp):
+                    logits = extract_logits(model(X))
+                    loss = criterion(logits, y)
+                scaler.scale(loss).backward()
+                scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=grad_clip)
-                optimizer.step()
+                scaler.step(optimizer)
+                scaler.update()
                 running_loss += loss.item() * y.size(0)
                 total_train += y.size(0)
                 correct_train += (logits.argmax(dim=1) == y).sum().item()
 
             train_loss = running_loss / max(total_train, 1)
             train_acc = correct_train / max(total_train, 1)
-            val_loss, val_acc, val_top5 = evaluate_epoch(model, val_loader, device, criterion)
+            val_loss, val_acc, val_top5 = evaluate_epoch(model, val_loader, device, criterion, use_amp)
             scheduler.step(val_acc)
             current_lr = optimizer.param_groups[0]["lr"]
 

@@ -1,8 +1,3 @@
-"""
-VISUALIZATION UTILITIES
-Visualize audio features, pitch contours, and model results
-"""
-
 import numpy as np
 import librosa
 import librosa.display
@@ -374,15 +369,15 @@ class AudioVisualizer:
         output_path.mkdir(parents=True, exist_ok=True)
         
         # Save individual plots
-        self.plot_waveform(audio, save_path=output_path / "waveform.png")
-        self.plot_spectrogram(audio, save_path=output_path / "spectrogram.png")
-        self.plot_mfcc(audio, save_path=output_path / "mfcc.png")
-        self.plot_chroma(audio, save_path=output_path / "chroma.png")
+        self.plot_waveform(audio, save_path=str(output_path / "waveform.png"))
+        self.plot_spectrogram(audio, save_path=str(output_path / "spectrogram.png"))
+        self.plot_mfcc(audio, save_path=str(output_path / "mfcc.png"))
+        self.plot_chroma(audio, save_path=str(output_path / "chroma.png"))
         self.plot_pitch_contour(pitch_contour, audio=audio, 
-                               save_path=output_path / "pitch_contour.png")
+                               save_path=str(output_path / "pitch_contour.png"))
         
         # Save dashboard
         self.create_analysis_dashboard(audio, features, pitch_contour,
-                                      save_path=output_path / "analysis_dashboard.png")
+                                      save_path=str(output_path / "analysis_dashboard.png"))
         
         print(f"[OK] Visualizations saved to: {output_path}")

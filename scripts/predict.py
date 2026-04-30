@@ -1,5 +1,3 @@
-"""Prediction script for Hum2Tune (CNN-LSTM only, small-data aligned)."""
-
 from __future__ import annotations
 
 import argparse

@@ -1,9 +1,3 @@
-"""Tests for evaluation metrics in Hum2Tune.
-
-Covers: Top-K accuracy, MRR, MAP@K, NDCG@K, confusion matrix,
-and most_confused_pairs. All functions use immutable default args.
-"""
-
 import warnings
 import numpy as np
 import pytest

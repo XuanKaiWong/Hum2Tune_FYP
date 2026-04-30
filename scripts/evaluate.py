@@ -1,15 +1,3 @@
-"""Evaluation script for Hum2Tune classifiers.
-
-Supports both CNN-LSTM and Audio Transformer models.
-Delegates all metric computation to fyp_title11.evaluation.metrics so
-there is one canonical implementation shared across training, evaluation,
-and notebooks.
-
-Usage:
-    python scripts/evaluate.py --model cnn_lstm
-    python scripts/evaluate.py --model audio_transformer
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -148,8 +136,9 @@ def evaluate(model_name: str = "cnn_lstm", curriculum: bool = False) -> None:
         raise ValueError(f"Unsupported model '{model_name}'. Choose from: {SUPPORTED_MODELS}")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    use_amp = torch.cuda.is_available()
     conf = load_training_config()
-    logger.info("Evaluating '%s' on device: %s", model_name, device)
+    logger.info("Evaluating '%s' on device: %s (AMP: %s)", model_name, device, use_amp)
 
     data_dir = project_root / "data" / "processed" / "datasets"
     results_dir = project_root / "results" / "evaluations"
@@ -176,7 +165,7 @@ def evaluate(model_name: str = "cnn_lstm", curriculum: bool = False) -> None:
         batch_size=int(conf.get("batch_size", 8)),
         shuffle=False,
         num_workers=int(conf.get("num_workers", 0)),
-        pin_memory=torch.cuda.is_available(),
+        pin_memory=(device.type == "cuda"),
     )
 
     # Select checkpoint based on whether curriculum mode was requested.
@@ -218,8 +207,10 @@ def evaluate(model_name: str = "cnn_lstm", curriculum: bool = False) -> None:
     with torch.no_grad():
         for X, y in test_loader:
             X = X.to(device, non_blocking=True)
-            logits = extract_logits(model(X))
-            probs = torch.softmax(logits, dim=1).cpu().numpy()
+            from torch.cuda.amp import autocast
+            with autocast(enabled=use_amp):
+                logits = extract_logits(model(X))
+            probs = torch.softmax(logits.float(), dim=1).cpu().numpy()
             all_probs.append(probs)
             all_preds.extend(probs.argmax(axis=1).tolist())
             all_targets.extend(y.numpy().tolist())

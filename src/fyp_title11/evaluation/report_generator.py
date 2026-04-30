@@ -1,19 +1,3 @@
-"""
-REPORT_GENERATOR.PY -- Automated Evaluation Report Builder
-FYP Hum2Tune: Melody-Based Music Recognition
-
-Generates a self-contained HTML evaluation report from saved results,
-including confusion matrix, per-class F1 bars, training curves,
-and a model vs. DTW baseline comparison table.
-
-Usage:
-    from scripts.report_generator import generate_report
-    generate_report()
-
-    # or via CLI:
-    python scripts/report_generator.py
-"""
-
 import json
 import logging
 from datetime import datetime

@@ -12,7 +12,7 @@ warnings.filterwarnings('ignore', message='.*CUDA.*', module='tensorflow')
 
 # Robust Import for CREPE
 try:
-    import crepe
+    import crepe  # type: ignore[import-not-found]
     HAS_CREPE = True
 except ImportError:
     HAS_CREPE = False

@@ -1,12 +1,3 @@
-"""
-Configuration loader for Hum2Tune.
-
-Loads and manages project configuration files with sensible defaults for the
-cleaned final FYP scope:
-- CNN-LSTM as the active neural model
-- DTW as the traditional baseline
-"""
-
 from __future__ import annotations
 
 import json

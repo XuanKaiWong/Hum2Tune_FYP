@@ -257,11 +257,11 @@ class CNNLSTMModel(nn.Module):
 
     def predict(self, x: torch.Tensor) -> torch.Tensor:
         logits = self.forward(x, return_features=False)
-        return torch.argmax(logits, dim=-1)
+        return torch.argmax(logits, dim=-1)  # type: ignore[arg-type]
 
     def predict_proba(self, x: torch.Tensor) -> torch.Tensor:
         logits = self.forward(x, return_features=False)
-        return F.softmax(logits, dim=-1)
+        return F.softmax(logits, dim=-1)  # type: ignore[arg-type]
 
     def get_embedding(self, x: torch.Tensor) -> torch.Tensor:
         _, features = self.forward(x, return_features=True)
@@ -400,11 +400,11 @@ class FusionModel(nn.Module):
 
     def predict(self, x_acoustic: torch.Tensor, x_pitch: torch.Tensor) -> torch.Tensor:
         logits, _ = self.forward(x_acoustic, x_pitch)
-        return torch.argmax(logits, dim=-1)
+        return torch.argmax(logits, dim=-1)  # type: ignore[arg-type]
 
     def predict_proba(self, x_acoustic: torch.Tensor, x_pitch: torch.Tensor) -> torch.Tensor:
         logits, _ = self.forward(x_acoustic, x_pitch)
-        return F.softmax(logits, dim=-1)
+        return F.softmax(logits, dim=-1)  # type: ignore[arg-type]
 
 # NOTE: LabelSmoothingCrossEntropy was removed because PyTorch >= 1.10 provides
 # nn.CrossEntropyLoss(label_smoothing=0.1) natively. Use that instead.

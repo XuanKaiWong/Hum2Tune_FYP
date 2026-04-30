@@ -1,18 +1,3 @@
-"""Generate the dissertation results comparison table.
-
-Reads evaluation JSON files from results/evaluations/ and retrieval
-summaries from outputs/ then prints a formatted comparison table.
-
-Two JSON formats are handled automatically:
-  - Classifier evals (evaluate.py): keys like top_1_accuracy, macro_f1
-  - Retrieval summaries (hybrid_retrieval.py): keys like top1, top3, top5, mrr
-
-Usage:
-    python scripts/results_table.py
-    python scripts/results_table.py --latex    # paste directly into dissertation
-    python scripts/results_table.py --csv      # for spreadsheet
-"""
-
 from __future__ import annotations
 
 import argparse

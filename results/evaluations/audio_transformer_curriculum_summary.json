@@ -1,0 +1,8 @@
+{
+  "model": "audio_transformer",
+  "stages": [
+    "stage2_polyphonic"
+  ],
+  "best_val_accuracy": 0.03297872340425532,
+  "history_length": 53
+}

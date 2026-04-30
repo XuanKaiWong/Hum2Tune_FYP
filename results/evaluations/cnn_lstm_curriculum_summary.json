@@ -1,0 +1,8 @@
+{
+  "model": "cnn_lstm",
+  "stages": [
+    "stage2_polyphonic"
+  ],
+  "best_val_accuracy": 0.010106382978723405,
+  "history_length": 22
+}

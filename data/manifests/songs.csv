@@ -1,4 +1,4 @@
-song_id,title,artist,reference_path
-001,Back To December,Taylor Swift,data/song_references/Back To December/vocals.wav
-002,A Thousand Years,Christina Perri,data/song_references/A Thousand Years/vocals.wav
-003,Sunflower,Post Malone,data/song_references/Sunflower/vocals.wav
+﻿"song_id","title","artist","reference_path"
+"001","Back To December","Taylor Swift","data/song_references/Back To December/vocals.wav"
+"002","A Thousand Years","Christina Perri","data/song_references/A Thousand Years/vocals.wav"
+"003","Sunflower","Post Malone","data/song_references/Sunflower/vocals.wav"

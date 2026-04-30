@@ -1,362 +1,409 @@
-"""
-METRICS.PY -- Evaluation Metrics for Hum2Tune
-FYP Hum2Tune: Melody-Based Music Recognition
+from __future__ import annotations
 
-Provides all metric computation functions used in evaluate.py and notebooks.
-Metrics included:
-  - Top-K accuracy (Top-1, Top-3, Top-5)
-  - Mean Reciprocal Rank (MRR)
-  - Mean Average Precision (MAP@K) -- standard IR metric
-  - Normalised Discounted Cumulative Gain (NDCG@K) -- standard IR metric
-  - Per-class classification metrics (precision, recall, F1)
-  - Confusion matrix and most-confused pair analysis
-
-Design rules applied throughout:
-  - No mutable default arguments (all list defaults use Optional[List] + None).
-  - Explicit `labels=` passed to every sklearn function so the code handles
-    the common real-world case where the evaluation split contains only a
-    subset of the full class set (e.g. a 7-class test set out of 100 classes).
-    Without `labels=`, sklearn raises:
-        ValueError: Number of classes, 7, does not match size of target_names, 100
-  - Confusion matrix always shaped to (num_classes, num_classes) when
-    class_names is provided, so downstream plot functions always receive a
-    square matrix with one row/column per known class.
-"""
+from typing import Any, Dict, List, Mapping, Optional, Tuple, cast
 
 import numpy as np
-from typing import Dict, List, Optional, Tuple
-
-from sklearn.metrics import (
-    classification_report,
-    confusion_matrix,
-    top_k_accuracy_score,
-)
+from numpy.typing import NDArray
+from sklearn.metrics import classification_report, confusion_matrix, top_k_accuracy_score
 
 
-# -----------------------------------------------------------------------------
-#  Ranking-based metrics
-# -----------------------------------------------------------------------------
+FloatArray = NDArray[np.float64]
+IntArray = NDArray[np.int64]
+
+
+def _as_1d_int_array(values: NDArray[Any] | List[Any]) -> IntArray:
+    arr = np.asarray(values, dtype=np.int64)
+    if arr.ndim != 1:
+        arr = arr.reshape(-1)
+    return arr
+
+
+def _as_2d_float_array(values: NDArray[Any] | List[Any]) -> FloatArray:
+    arr = np.asarray(values, dtype=np.float64)
+    if arr.ndim != 2:
+        raise ValueError(f"Expected a 2D score/probability array, got shape {arr.shape}")
+    return arr
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _get_report_row(report: Mapping[str, Any], row_name: str) -> Mapping[str, Any]:
+    row = report.get(row_name, {})
+    if isinstance(row, Mapping):
+        return cast(Mapping[str, Any], row)
+    return {}
+
+
+def _get_report_metric(
+    report: Mapping[str, Any],
+    row_name: str,
+    metric_name: str,
+    default: float = 0.0,
+) -> float:
+    row = _get_report_row(report, row_name)
+    return _safe_float(row.get(metric_name, default), default)
+
+
+def _validate_classification_inputs(
+    y_true: NDArray[Any] | List[Any],
+    y_pred: NDArray[Any] | List[Any],
+) -> Tuple[IntArray, IntArray]:
+    true_arr = _as_1d_int_array(y_true)
+    pred_arr = _as_1d_int_array(y_pred)
+
+    if true_arr.shape[0] != pred_arr.shape[0]:
+        raise ValueError(
+            "y_true and y_pred must contain the same number of samples. "
+            f"Got {true_arr.shape[0]} and {pred_arr.shape[0]}."
+        )
+
+    return true_arr, pred_arr
+
+
+def _validate_ranking_inputs(
+    y_true: NDArray[Any] | List[Any],
+    y_prob: NDArray[Any] | List[Any],
+) -> Tuple[IntArray, FloatArray]:
+    true_arr = _as_1d_int_array(y_true)
+    prob_arr = _as_2d_float_array(y_prob)
+
+    if true_arr.shape[0] != prob_arr.shape[0]:
+        raise ValueError(
+            "y_true and y_prob must contain the same number of samples. "
+            f"Got {true_arr.shape[0]} and {prob_arr.shape[0]}."
+        )
+
+    if prob_arr.shape[1] <= 0:
+        raise ValueError("y_prob must contain at least one class column.")
+
+    return true_arr, prob_arr
+
 
 def compute_top_k_accuracy(
-    y_true: np.ndarray,
-    y_prob: np.ndarray,
+    y_true: NDArray[Any] | List[Any],
+    y_prob: NDArray[Any] | List[Any],
     k_values: Optional[List[int]] = None,
 ) -> Dict[str, float]:
-    """Compute Top-K accuracy for multiple values of K.
+    true_arr, prob_arr = _validate_ranking_inputs(y_true, y_prob)
 
-    Args:
-        y_true: Ground-truth class indices, shape (N,).
-        y_prob: Predicted probability scores, shape (N, num_classes).
-        k_values: K values to evaluate. Defaults to [1, 3, 5].
-
-    Returns:
-        Dict mapping 'top_k_accuracy' -> float.
-        E.g. {'top_1_accuracy': 0.82, 'top_3_accuracy': 0.95, ...}
-    """
     if k_values is None:
         k_values = [1, 3, 5]
 
-    num_classes = y_prob.shape[1]
-    # Pass labels= explicitly so sklearn works when not all classes appear in
-    # y_true (common with small or stratified test sets).
-    all_labels = np.arange(num_classes)
-    results = {}
+    num_classes = int(prob_arr.shape[1])
+    labels = np.arange(num_classes, dtype=np.int64)
+
+    results: Dict[str, float] = {}
+
     for k in k_values:
-        if k > num_classes:
+        k = int(k)
+
+        if k <= 0 or k > num_classes:
             continue
-        score = top_k_accuracy_score(y_true, y_prob, k=k, labels=all_labels)
-        results[f"top_{k}_accuracy"] = float(score)
+
+        try:
+            score = top_k_accuracy_score(true_arr, prob_arr, k=k, labels=labels)
+            results[f"top_{k}_accuracy"] = float(score)
+        except ValueError:
+            ranked = np.argsort(-prob_arr, axis=1)[:, :k]
+            hits = np.any(ranked == true_arr[:, None], axis=1)
+            results[f"top_{k}_accuracy"] = float(np.mean(hits))
+
     return results
 
 
 def compute_mrr(
-    y_true: np.ndarray,
-    y_prob: np.ndarray,
+    y_true: NDArray[Any] | List[Any],
+    y_prob: NDArray[Any] | List[Any],
 ) -> float:
-    """Compute Mean Reciprocal Rank (MRR).
+    true_arr, prob_arr = _validate_ranking_inputs(y_true, y_prob)
+    ranked = np.argsort(-prob_arr, axis=1)
 
-    MRR = 1 -> correct song always ranked #1.
-    MRR = 0.5 -> correct song on average ranked #2.
+    reciprocal_ranks: List[float] = []
 
-    Args:
-        y_true: Ground-truth class indices, shape (N,).
-        y_prob: Probability scores, shape (N, num_classes).
+    for i, true_label in enumerate(true_arr):
+        positions = np.where(ranked[i] == true_label)[0]
 
-    Returns:
-        MRR as a float in [0, 1].
-    """
-    ranked = np.argsort(-y_prob, axis=1)   # descending probability order
-    reciprocal_ranks = []
-    for i in range(len(y_true)):
-        positions = np.where(ranked[i] == y_true[i])[0]
         if len(positions) == 0:
             reciprocal_ranks.append(0.0)
         else:
-            reciprocal_ranks.append(1.0 / (int(positions[0]) + 1))
-    return float(np.mean(reciprocal_ranks))
+            rank = int(positions[0]) + 1
+            reciprocal_ranks.append(1.0 / rank)
+
+    return float(np.mean(reciprocal_ranks)) if reciprocal_ranks else 0.0
 
 
 def compute_map(
-    y_true: np.ndarray,
-    y_prob: np.ndarray,
+    y_true: NDArray[Any] | List[Any],
+    y_prob: NDArray[Any] | List[Any],
     max_k: int = 10,
 ) -> float:
-    """Compute Mean Average Precision (MAP) at rank max_k.
+    true_arr, prob_arr = _validate_ranking_inputs(y_true, y_prob)
 
-    MAP rewards systems that place the correct answer near the top of the
-    ranking. It is the standard retrieval metric at ISMIR and MIREX.
+    if max_k <= 0:
+        return 0.0
 
-    Args:
-        y_true: Ground-truth class indices, shape (N,).
-        y_prob: Probability scores, shape (N, num_classes).
-        max_k:  Rank cut-off for AP computation.
+    actual_k = min(int(max_k), int(prob_arr.shape[1]))
+    ranked = np.argsort(-prob_arr, axis=1)[:, :actual_k]
 
-    Returns:
-        MAP@max_k as a float in [0, 1].
-    """
-    # Clamp max_k to actual num_classes to avoid shape mismatch.
-    actual_k = min(max_k, y_prob.shape[1])
-    ranked = np.argsort(-y_prob, axis=1)[:, :actual_k]
-    average_precisions = []
-    for i in range(len(y_true)):
-        hits = (ranked[i] == y_true[i]).astype(float)
-        if hits.sum() == 0:
+    average_precisions: List[float] = []
+
+    for i, true_label in enumerate(true_arr):
+        hits = (ranked[i] == true_label).astype(np.float64)
+
+        if float(hits.sum()) == 0.0:
             average_precisions.append(0.0)
             continue
+
         cumulative_hits = np.cumsum(hits)
         precision_at_k = cumulative_hits / (np.arange(actual_k) + 1)
         ap = float(np.sum(precision_at_k * hits) / hits.sum())
         average_precisions.append(ap)
-    return float(np.mean(average_precisions))
+
+    return float(np.mean(average_precisions)) if average_precisions else 0.0
 
 
 def compute_ndcg(
-    y_true: np.ndarray,
-    y_prob: np.ndarray,
+    y_true: NDArray[Any] | List[Any],
+    y_prob: NDArray[Any] | List[Any],
     max_k: int = 10,
 ) -> float:
-    """Compute Normalised Discounted Cumulative Gain (NDCG) at rank max_k.
+    true_arr, prob_arr = _validate_ranking_inputs(y_true, y_prob)
 
-    NDCG applies a logarithmic discount to penalise correct answers at lower
-    ranks. NDCG = 1 -> correct song always ranked #1.
+    if max_k <= 0:
+        return 0.0
 
-    Args:
-        y_true: Ground-truth class indices, shape (N,).
-        y_prob: Probability scores, shape (N, num_classes).
-        max_k:  Rank cut-off.
+    actual_k = min(int(max_k), int(prob_arr.shape[1]))
+    ranked = np.argsort(-prob_arr, axis=1)[:, :actual_k]
 
-    Returns:
-        NDCG@max_k as a float in [0, 1].
-    """
-    actual_k = min(max_k, y_prob.shape[1])
-    ranked = np.argsort(-y_prob, axis=1)[:, :actual_k]
     discounts = 1.0 / np.log2(np.arange(2, actual_k + 2))
-    ndcg_scores = []
-    for i in range(len(y_true)):
-        hits = (ranked[i] == y_true[i]).astype(float)
+    ideal_dcg = float(discounts[0])
+    ndcg_scores: List[float] = []
+
+    for i, true_label in enumerate(true_arr):
+        hits = (ranked[i] == true_label).astype(np.float64)
         dcg = float(np.sum(hits * discounts))
-        idcg = discounts[0]   # ideal: correct answer at rank 1
-        ndcg_scores.append(dcg / idcg if idcg > 0 else 0.0)
-    return float(np.mean(ndcg_scores))
+        ndcg_scores.append(dcg / ideal_dcg if ideal_dcg > 0 else 0.0)
 
+    return float(np.mean(ndcg_scores)) if ndcg_scores else 0.0
 
-# -----------------------------------------------------------------------------
-#  Classification metrics
-# -----------------------------------------------------------------------------
 
 def compute_classification_metrics(
-    y_true: np.ndarray,
-    y_pred: np.ndarray,
+    y_true: NDArray[Any] | List[Any],
+    y_pred: NDArray[Any] | List[Any],
     class_names: Optional[List[str]] = None,
-) -> Dict:
-    """Compute full per-class classification metrics.
+) -> Dict[str, Any]:
+    true_arr, pred_arr = _validate_classification_inputs(y_true, y_pred)
 
-    Passes `labels=` to sklearn so the report always covers all known
-    classes -- not just the subset that appears in y_true. This prevents
-    the crash:
-        ValueError: Number of classes, 7, does not match size of target_names, 100
-
-    Args:
-        y_true:       Ground-truth class indices.
-        y_pred:       Predicted class indices.
-        class_names:  Optional list of human-readable class names indexed by
-                      class integer. len(class_names) defines the full class set.
-
-    Returns:
-        Dict with keys: accuracy, macro_precision, macro_recall, macro_f1,
-        weighted_f1, per_class (dict), report_str (formatted string).
-    """
     if class_names is not None:
-        # labels= forces sklearn to report all num_classes rows even when some
-        # classes are absent from the evaluation split.
         labels = list(range(len(class_names)))
-        report_dict = classification_report(
-            y_true, y_pred,
+
+        report_raw = classification_report(
+            true_arr,
+            pred_arr,
             labels=labels,
             target_names=class_names,
             output_dict=True,
             zero_division=0,
         )
+
         report_str = classification_report(
-            y_true, y_pred,
+            true_arr,
+            pred_arr,
             labels=labels,
             target_names=class_names,
             zero_division=0,
         )
     else:
-        report_dict = classification_report(
-            y_true, y_pred,
+        report_raw = classification_report(
+            true_arr,
+            pred_arr,
             output_dict=True,
             zero_division=0,
         )
+
         report_str = classification_report(
-            y_true, y_pred,
+            true_arr,
+            pred_arr,
             zero_division=0,
         )
 
-    results: Dict = {
-        "accuracy":         float(report_dict["accuracy"]),
-        "macro_precision":  float(report_dict["macro avg"]["precision"]),
-        "macro_recall":     float(report_dict["macro avg"]["recall"]),
-        "macro_f1":         float(report_dict["macro avg"]["f1-score"]),
-        "weighted_f1":      float(report_dict["weighted avg"]["f1-score"]),
-        "report_str":       report_str,
-        "per_class":        {},
+    report_dict = cast(Mapping[str, Any], report_raw)
+
+    results: Dict[str, Any] = {
+        "accuracy": _safe_float(report_dict.get("accuracy", 0.0)),
+        "macro_precision": _get_report_metric(report_dict, "macro avg", "precision"),
+        "macro_recall": _get_report_metric(report_dict, "macro avg", "recall"),
+        "macro_f1": _get_report_metric(report_dict, "macro avg", "f1-score"),
+        "weighted_f1": _get_report_metric(report_dict, "weighted avg", "f1-score"),
+        "report_str": report_str,
+        "per_class": {},
     }
 
-    if class_names:
-        for name in class_names:
-            if name in report_dict:
-                results["per_class"][name] = {
-                    "precision": round(report_dict[name]["precision"], 4),
-                    "recall":    round(report_dict[name]["recall"], 4),
-                    "f1":        round(report_dict[name]["f1-score"], 4),
-                    "support":   int(report_dict[name]["support"]),
-                }
+    per_class: Dict[str, Dict[str, float | int]] = {}
 
+    if class_names is not None:
+        for class_name in class_names:
+            row = _get_report_row(report_dict, class_name)
+
+            per_class[class_name] = {
+                "precision": round(_safe_float(row.get("precision", 0.0)), 4),
+                "recall": round(_safe_float(row.get("recall", 0.0)), 4),
+                "f1": round(_safe_float(row.get("f1-score", 0.0)), 4),
+                "support": _safe_int(row.get("support", 0)),
+            }
+
+    results["per_class"] = per_class
     return results
 
 
 def compute_confusion_matrix(
-    y_true: np.ndarray,
-    y_pred: np.ndarray,
+    y_true: NDArray[Any] | List[Any],
+    y_pred: NDArray[Any] | List[Any],
     num_classes: Optional[int] = None,
     normalise: bool = False,
-) -> np.ndarray:
-    """Compute confusion matrix of shape (num_classes, num_classes).
+) -> NDArray[Any]:
+    true_arr, pred_arr = _validate_classification_inputs(y_true, y_pred)
 
-    Passes `labels=` so the matrix is always square and covers all known
-    classes -- not just those present in y_true. This ensures downstream
-    plot functions receive a matrix with the expected number of rows and
-    columns even when the test split is small.
-
-    Args:
-        y_true:       Ground-truth class indices.
-        y_pred:       Predicted class indices.
-        num_classes:  Total number of classes. Inferred from y_true/y_pred if
-                      None, but should always be passed when using class_names.
-        normalise:    If True, return row-normalised matrix (proportions).
-
-    Returns:
-        Confusion matrix as a 2D numpy array, shape (num_classes, num_classes).
-    """
     if num_classes is not None:
-        labels = list(range(num_classes))
-        cm = confusion_matrix(y_true, y_pred, labels=labels)
+        labels = list(range(int(num_classes)))
+        cm = confusion_matrix(true_arr, pred_arr, labels=labels)
     else:
-        cm = confusion_matrix(y_true, y_pred)
+        cm = confusion_matrix(true_arr, pred_arr)
 
-    if normalise:
-        row_sums = cm.sum(axis=1, keepdims=True)
-        cm = np.where(row_sums == 0, 0.0, cm.astype(float) / row_sums)
+    if not normalise:
+        return cm
 
-    return cm
+    row_sums = cm.sum(axis=1, keepdims=True)
+    cm_float = cm.astype(np.float64)
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        normalised = np.divide(
+            cm_float,
+            row_sums,
+            out=np.zeros_like(cm_float),
+            where=row_sums != 0,
+        )
+
+    return normalised
 
 
 def most_confused_pairs(
-    y_true: np.ndarray,
-    y_pred: np.ndarray,
+    y_true: NDArray[Any] | List[Any],
+    y_pred: NDArray[Any] | List[Any],
     class_names: List[str],
     top_n: int = 5,
 ) -> List[Tuple[str, str, int]]:
-    """Find the most frequently confused class pairs.
-
-    Useful for error analysis -- shows which songs the model struggles to
-    distinguish (e.g. songs with similar choruses or tempo profiles).
-
-    Args:
-        y_true:       Ground-truth class indices.
-        y_pred:       Predicted class indices.
-        class_names:  List of class names indexed by class integer.
-        top_n:        Number of top confused pairs to return.
-
-    Returns:
-        List of (true_class_name, predicted_class_name, count) tuples,
-        sorted descending by count. Off-diagonal cells only.
-    """
-    # Pass labels= so matrix covers all classes, not just those in y_true.
+    true_arr, pred_arr = _validate_classification_inputs(y_true, y_pred)
     labels = list(range(len(class_names)))
-    cm = confusion_matrix(y_true, y_pred, labels=labels)
+    cm = confusion_matrix(true_arr, pred_arr, labels=labels)
 
-    pairs = []
-    for i in range(len(cm)):
-        for j in range(len(cm)):
-            if i != j and cm[i, j] > 0:
-                true_name = class_names[i] if i < len(class_names) else str(i)
-                pred_name = class_names[j] if j < len(class_names) else str(j)
-                pairs.append((true_name, pred_name, int(cm[i, j])))
+    pairs: List[Tuple[str, str, int]] = []
 
-    pairs.sort(key=lambda x: x[2], reverse=True)
-    return pairs[:top_n]
+    for true_idx in range(cm.shape[0]):
+        for pred_idx in range(cm.shape[1]):
+            count = int(cm[true_idx, pred_idx])
 
+            if true_idx == pred_idx or count <= 0:
+                continue
 
-# -----------------------------------------------------------------------------
-#  Combined convenience function
-# -----------------------------------------------------------------------------
+            true_name = class_names[true_idx] if true_idx < len(class_names) else str(true_idx)
+            pred_name = class_names[pred_idx] if pred_idx < len(class_names) else str(pred_idx)
+
+            pairs.append((true_name, pred_name, count))
+
+    pairs.sort(key=lambda item: item[2], reverse=True)
+    return pairs[: int(top_n)]
+
 
 def compute_all_metrics(
-    y_true: np.ndarray,
-    y_pred: np.ndarray,
-    y_prob: np.ndarray,
+    y_true: NDArray[Any] | List[Any],
+    y_pred: NDArray[Any] | List[Any],
+    y_prob: NDArray[Any] | List[Any],
     class_names: Optional[List[str]] = None,
     top_k_values: Optional[List[int]] = None,
-) -> Dict:
-    """Compute all metrics in one call.
+) -> Dict[str, Any]:
+    true_arr, prob_arr = _validate_ranking_inputs(y_true, y_prob)
+    pred_arr = _as_1d_int_array(y_pred)
 
-    Args:
-        y_true:       Ground-truth class indices, shape (N,).
-        y_pred:       Predicted class indices, shape (N,).
-        y_prob:       Probability scores, shape (N, num_classes).
-        class_names:  Optional list of class name strings.
-        top_k_values: K values for Top-K accuracy. Defaults to [1, 3, 5].
+    if pred_arr.shape[0] != true_arr.shape[0]:
+        raise ValueError(
+            "y_pred must contain the same number of samples as y_true. "
+            f"Got {pred_arr.shape[0]} and {true_arr.shape[0]}."
+        )
 
-    Returns:
-        Merged dictionary of all metric results.
-    """
     if top_k_values is None:
         top_k_values = [1, 3, 5]
 
-    num_classes = y_prob.shape[1]
-    results: Dict = {}
+    num_classes = int(prob_arr.shape[1])
+    results: Dict[str, Any] = {}
 
-    # Ranking-based retrieval metrics
-    results.update(compute_top_k_accuracy(y_true, y_prob, k_values=top_k_values))
-    results["mrr"]       = compute_mrr(y_true, y_prob)
-    results["map_at_10"] = compute_map(y_true, y_prob, max_k=10)
-    results["ndcg_at_10"]= compute_ndcg(y_true, y_prob, max_k=10)
+    results.update(compute_top_k_accuracy(true_arr, prob_arr, k_values=top_k_values))
+    results["mrr"] = compute_mrr(true_arr, prob_arr)
+    results["map_at_10"] = compute_map(true_arr, prob_arr, max_k=10)
+    results["ndcg_at_10"] = compute_ndcg(true_arr, prob_arr, max_k=10)
 
-    # Per-class classification metrics (labels= handled inside)
-    results.update(compute_classification_metrics(y_true, y_pred, class_names))
+    results.update(
+        compute_classification_metrics(
+            true_arr,
+            pred_arr,
+            class_names=class_names,
+        )
+    )
 
-    # Confusion matrix -- pass num_classes so matrix is always (C, C)
     results["confusion_matrix"] = compute_confusion_matrix(
-        y_true, y_pred, num_classes=num_classes
+        true_arr,
+        pred_arr,
+        num_classes=num_classes,
+        normalise=False,
     ).tolist()
 
-    # Most confused pairs
-    if class_names:
+    if class_names is not None:
         results["most_confused_pairs"] = most_confused_pairs(
-            y_true, y_pred, class_names
+            true_arr,
+            pred_arr,
+            class_names,
         )
+    else:
+        results["most_confused_pairs"] = []
 
     return results
+
+
+if __name__ == "__main__":
+    y_true_test = np.array([0, 1, 2, 1, 0])
+    y_pred_test = np.array([0, 1, 1, 1, 0])
+    y_prob_test = np.array(
+        [
+            [0.90, 0.05, 0.05],
+            [0.10, 0.80, 0.10],
+            [0.20, 0.60, 0.20],
+            [0.15, 0.70, 0.15],
+            [0.85, 0.10, 0.05],
+        ],
+        dtype=np.float64,
+    )
+    class_names_test = ["Song A", "Song B", "Song C"]
+
+    metrics = compute_all_metrics(
+        y_true=y_true_test,
+        y_pred=y_pred_test,
+        y_prob=y_prob_test,
+        class_names=class_names_test,
+    )
+
+    print("Accuracy:", metrics["accuracy"])
+    print("Top-1:", metrics["top_1_accuracy"])
+    print("MRR:", metrics["mrr"])
+    print("Most confused:", metrics["most_confused_pairs"])

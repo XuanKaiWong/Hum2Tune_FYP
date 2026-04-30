@@ -1,12 +1,3 @@
-"""Model tests for Hum2Tune.
-
-Tests cover:
-- CNNLSTMModel forward shapes for both return_features modes
-- AudioTransformer forward shapes
-- PitchCNN and FusionModel shapes
-- Parametrised channel/class/length combinations for ablation coverage
-"""
-
 import warnings
 import pytest
 import torch

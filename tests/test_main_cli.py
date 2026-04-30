@@ -1,12 +1,3 @@
-"""Tests for main.py CLI entry point.
-
-Verifies that:
-- All subcommands are registered and print help without crashing.
-- MODEL_CHOICES includes both cnn_lstm and audio_transformer.
-- The --curriculum flag is exposed on the train subcommand.
-- The evaluate and predict subcommands accept audio_transformer as a model.
-"""
-
 import subprocess
 import sys
 from pathlib import Path
